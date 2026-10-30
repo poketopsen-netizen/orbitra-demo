@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#07110f">
+  <meta name="description" content="Orbitra — учебная платформа для знакомства с рыночными графиками и demo-сделками.">
+  <title>Orbitra — Mobile Markets</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar topbar-v13">
+      <a class="brand" href="#home" data-route="home"><span class="brand-mark">O</span><span>orbitra</span></a>
+      <div class="topbar-actions">
+        <label class="language-control" aria-label="Language">
+          <span class="language-globe" id="languageFlag">🌐</span>
+          <select id="languageSelect">
+            <option value="es">🇪🇸 Español</option>
+            <option value="en">🇺🇸 English</option>
+            <option value="fr">🇫🇷 Français</option>
+            <option value="pt">🇵🇹 Português</option>
+            <option value="ar">🇸🇦 العربية</option>
+            <option value="ru">🇷🇺 Русский</option>
+          </select>
+        </label>
+        <button class="top-auth-btn" id="topAuthBtn" data-route="login">Войти</button>
+        <button class="icon-btn" id="menuBtn" aria-label="Меню"><span></span><span></span></button>
+      </div>
+    </header>
+
+    <section class="ticker">
+      <div><small>MARKET</small><b>$3.27T</b></div>
+      <div><small>BTC</small><b>$97,234</b></div>
+      <div><small>ETH</small><b>$3,421</b></div>
+      <div class="status"><i></i><span>Live</span></div>
+    </section>
+
+    <section class="activity-tape" aria-label="Demo activity">
+      <div class="activity-badge"><i></i><span id="activityLabel">DEMO ACTIVITY</span></div>
+      <div class="activity-window"><div class="activity-track" id="activityTrack"></div></div>
+    </section>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="flash-wrap">
+          {% for category, message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    <div id="screen" class="screen"
+         data-auth="{{ '1' if user else '0' }}"
+         data-id="{{ user['public_id'] if user else '' }}"
+         data-first-name="{{ user['first_name'] if user else '' }}"
+         data-last-name="{{ user['last_name'] if user else '' }}"
+         data-country="{{ user['country'] if user else '' }}"
+         data-balance="{{ user['demo_balance'] if user else 1000 }}"
+         data-has-password="{{ '1' if user and user['password_hash'] else '0' }}"
+         data-new-id="{{ just_registered_id }}"></div>
+
+    <nav class="bottom-nav">
+      <button data-route="home" class="nav-item active"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10.5V20h13V10.5"/><path d="M10 20v-5h4v5"/></svg></span><small data-nav="home">Главная</small></button>
+      <button data-route="markets" class="nav-item"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><rect x="3.5" y="11" width="4" height="8" rx="1.2"/><rect x="10" y="7" width="4" height="12" rx="1.2"/><rect x="16.5" y="4" width="4" height="15" rx="1.2"/></svg></span><small data-nav="markets">Активы</small></button>
+      <button data-route="trade" class="nav-item trade-action"><span class="trade-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h11l-3-3"/><path d="m18 7-3 3"/><path d="M17 17H6l3 3"/><path d="m6 17 3-3"/></svg></span><small data-nav="trade">Торговать</small></button>
+      <button data-route="wallet" class="nav-item"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6H18a2 2 0 0 1 2 2v1.5"/><path d="M4 8.5h14.5A1.5 1.5 0 0 1 20 10v7a2 2 0 0 1-2 2H6.5A2.5 2.5 0 0 1 4 16.5z"/><path d="M15.5 13h4"/><circle cx="15.5" cy="13" r=".9" fill="currentColor" stroke="none"/></svg></span><small data-nav="wallet">Кошелёк</small></button>
+      <button data-route="profile" class="nav-item"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="3.2"/><path d="M5 19c1.8-3 4.1-4.5 7-4.5s5.2 1.5 7 4.5"/></svg></span><small data-nav="profile">Профиль</small></button>
+    </nav>
+  </main>
+
+  <aside class="drawer" id="drawer" aria-hidden="true">
+    <div class="drawer-head">
+      <div class="brand"><span class="brand-mark">O</span><span>orbitra</span></div>
+      <button class="icon-btn close" id="closeMenu">×</button>
+    </div>
+    <div class="drawer-links" id="drawerLinks">
+      <button data-route="home"><span data-drawer="home">Главная</span><span>→</span></button>
+      <button data-route="markets"><span data-drawer="markets">Рынки</span><span>→</span></button>
+      <button data-route="trade"><span data-drawer="trade">Торговля</span><span>→</span></button>
+      <button data-route="wallet"><span data-drawer="wallet">Кошелёк</span><span>→</span></button>
+      <button data-route="profile"><span data-drawer="profile">Профиль</span><span>→</span></button>
+      <button data-route="about"><span data-drawer="about">О платформе</span><span>→</span></button>
+      <button data-route="security"><span data-drawer="security">Безопасность</span><span>→</span></button>
+      <button data-route="help"><span data-drawer="help">Помощь</span><span>→</span></button>
+      <button data-route="terms"><span data-drawer="terms">Условия</span><span>→</span></button>
+      <button data-route="privacy"><span data-drawer="privacy">Политика конфиденциальности</span><span>→</span></button>
+      <button data-route="guarantees"><span data-drawer="guarantees">Гарантии</span><span>→</span></button>
+    </div>
+    <div class="drawer-actions">
+      {% if user %}
+        <form method="post" action="{{ url_for('logout') }}"><button class="btn secondary full" type="submit" id="logoutBtn">Выйти</button></form>
+      {% else %}
+        <button class="btn secondary" data-route="login" id="loginDrawerBtn">Войти</button>
+        <button class="btn primary" data-route="register" id="registerDrawerBtn">Регистрация</button>
+      {% endif %}
+    </div>
+  </aside>
+  <div class="backdrop" id="backdrop"></div>
+
+  <script>window.ORBITRA_COUNTRIES = {{ countries_es|tojson }};</script>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
