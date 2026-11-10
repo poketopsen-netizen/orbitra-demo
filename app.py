@@ -5,16 +5,19 @@ import json
 import urllib.request
 import urllib.parse
 import os
+import math
 import ipaddress
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
 
 BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = BASE_DIR / 'orbitra.db'
+DB_PATH = Path(os.environ.get('DATABASE_PATH', str(BASE_DIR / 'orbitra.db')))
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'orbitra-demo-local-secret-change-in-production')
+app.secret_key = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=os.environ.get('RENDER', '').lower() == 'true')
 TRADE_DURATION_SECONDS = 10
 MARKET_CACHE = {}
 
@@ -87,7 +90,8 @@ def browser_language():
 
 
 def db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=20)
+    conn.execute('PRAGMA busy_timeout=20000')
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -138,6 +142,7 @@ def init_db():
         if not row['last_name']:
             conn.execute('UPDATE users SET last_name=? WHERE id=?', ('Orbitra', row['id']))
     conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_public_id ON users(public_id)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_trades_user_status ON demo_trades(user_id, status)')
     conn.commit(); conn.close()
 
 
@@ -313,8 +318,11 @@ def register():
         flash('Introduce tu nombre y apellido.','error'); return redirect(url_for('index')+'#register')
     if country not in COUNTRIES_ES:
         flash('Selecciona tu país de la lista.','error'); return redirect(url_for('index')+'#register')
+    password=request.form.get('password','')
+    if len(password)<8:
+        flash('La contraseña debe tener al menos 8 caracteres.','error'); return redirect(url_for('index')+'#register')
     conn=db(); public_id=generate_public_id(conn)
-    cur=conn.execute('INSERT INTO users(public_id,first_name,last_name,country,demo_balance) VALUES(?,?,?,?,1000)',(public_id,first_name,last_name,country)); user_id=cur.lastrowid
+    cur=conn.execute('INSERT INTO users(public_id,first_name,last_name,country,demo_balance,password_hash) VALUES(?,?,?,?,1000,?)',(public_id,first_name,last_name,country,generate_password_hash(password))); user_id=cur.lastrowid
     conn.commit(); conn.close()
     # Guest training positions/history intentionally do not migrate into a real profile.
     session.pop('guest_demo_balance',None); session.pop('guest_demo_trades',None)
@@ -326,9 +334,9 @@ def register():
 def login():
     public_id=request.form.get('public_id','').strip().upper(); first_name=request.form.get('first_name','').strip(); last_name=request.form.get('last_name','').strip(); password=request.form.get('password','')
     conn=db(); user=conn.execute('''SELECT * FROM users WHERE UPPER(public_id)=UPPER(?) AND LOWER(first_name)=LOWER(?) AND LOWER(last_name)=LOWER(?)''',(public_id,first_name,last_name)).fetchone(); conn.close()
-    if not user or (user['password_hash'] and not check_password_hash(user['password_hash'], password)):
+    if not user or not user['password_hash'] or not check_password_hash(user['password_hash'], password):
         flash('Datos de acceso incorrectos.','error'); return redirect(url_for('index')+'#login')
-    session['user_id']=user['id']; flash('Sesión iniciada.','success'); return redirect(url_for('index')+'#profile')
+    session.clear(); session['user_id']=user['id']; flash('Sesión iniciada.','success'); return redirect(url_for('index')+'#profile')
 
 @app.post('/set-password')
 def set_password():
@@ -337,6 +345,8 @@ def set_password():
         flash('Primero inicia sesión.','error'); return redirect(url_for('index')+'#login')
     password=request.form.get('password','')
     confirm=request.form.get('confirm_password','')
+    if user['password_hash'] and not check_password_hash(user['password_hash'],request.form.get('current_password','')):
+        flash('Contraseña actual incorrecta.','error'); return redirect(url_for('index')+'#profile')
     if len(password) < 8:
         flash('La contraseña debe tener al menos 8 caracteres.','error'); return redirect(url_for('index')+'#profile')
     if password != confirm:
@@ -401,12 +411,12 @@ def list_trades():
         for r in raw:
             if r['status']=='OPEN' and seconds_left(r.get('opened_at')) <= 0:
                 try: price=fetch_ticker(r['symbol'])['price']
-                except Exception: price=float(r['entry_price'])
+                except Exception: continue  # Retry settlement when the price feed returns.
                 result=training_result(r,price)
                 stake=result['stake']
                 settlement=result['settlement']
-                conn.execute("UPDATE demo_trades SET status='CLOSED',exit_price=?,closed_at=CURRENT_TIMESTAMP WHERE id=?",(price,r['id']))
-                conn.execute('UPDATE users SET demo_balance=demo_balance+? WHERE id=?',(settlement,user['id']))
+                updated=conn.execute("UPDATE demo_trades SET status='CLOSED',exit_price=?,closed_at=CURRENT_TIMESTAMP WHERE id=? AND status='OPEN'",(price,r['id']))
+                if updated.rowcount: conn.execute('UPDATE users SET demo_balance=demo_balance+? WHERE id=?',(settlement,user['id']))
                 auto_closed.append({'id':r['id'],'exit_price':price,**result})
         if auto_closed: conn.commit()
         balance=float(conn.execute('SELECT demo_balance FROM users WHERE id=?',(user['id'],)).fetchone()['demo_balance'])
@@ -417,7 +427,7 @@ def list_trades():
         for r in raw:
             if r['status']=='OPEN' and seconds_left(r.get('opened_at')) <= 0:
                 try: price=fetch_ticker(r['symbol'])['price']
-                except Exception: price=float(r['entry_price'])
+                except Exception: continue  # Retry settlement when the price feed returns.
                 result=training_result(r,price)
                 stake=result['stake']
                 settlement=result['settlement']
@@ -443,7 +453,7 @@ def open_trade():
     data=request.get_json(silent=True) or {}; symbol=str(data.get('symbol','')).upper(); side=str(data.get('side','')).upper()
     try: amount=float(data.get('amount',0))
     except Exception: amount=0
-    if symbol not in MARKETS or side not in {'BUY','SELL'} or amount<=0: return jsonify({'error':'invalid order'}),400
+    if symbol not in MARKETS or side not in {'BUY','SELL'} or not math.isfinite(amount) or amount<=0: return jsonify({'error':'invalid order'}),400
     try: price=fetch_ticker(symbol)['price']
     except Exception: return jsonify({'error':'market price unavailable'}),503
     balance=float(user['demo_balance']) if user else guest_demo_state()[0]
@@ -452,7 +462,12 @@ def open_trade():
     opened=datetime.now(timezone.utc)
     new_balance=balance-amount
     if user:
-        conn=db(); cur=conn.execute('INSERT INTO demo_trades(user_id,symbol,side,quantity,entry_price,opened_at) VALUES(?,?,?,?,?,?)',(user['id'],symbol,side,quantity,price,opened.isoformat())); conn.execute('UPDATE users SET demo_balance=? WHERE id=?',(new_balance,user['id'])); conn.commit(); conn.close(); trade_id=cur.lastrowid
+        conn=db(); conn.execute('BEGIN IMMEDIATE')
+        latest_balance=float(conn.execute('SELECT demo_balance FROM users WHERE id=?',(user['id'],)).fetchone()['demo_balance'])
+        if amount>latest_balance:
+            conn.rollback(); conn.close(); return jsonify({'error':'insufficient demo balance','max_notional':latest_balance}),400
+        new_balance=latest_balance-amount
+        cur=conn.execute('INSERT INTO demo_trades(user_id,symbol,side,quantity,entry_price,opened_at) VALUES(?,?,?,?,?,?)',(user['id'],symbol,side,quantity,price,opened.isoformat())); conn.execute('UPDATE users SET demo_balance=? WHERE id=?',(new_balance,user['id'])); conn.commit(); conn.close(); trade_id=cur.lastrowid
     else:
         balance, trades=guest_demo_state(); trade_id=(max([int(t['id']) for t in trades], default=0)+1)
         trades.append({'id':trade_id,'symbol':symbol,'side':side,'quantity':quantity,'entry_price':price,'exit_price':None,'status':'OPEN','opened_at':opened.isoformat(),'closed_at':None})
@@ -466,12 +481,16 @@ def refill_demo_balance():
     user = current_user()
     if user:
         conn = db()
+        conn.execute('BEGIN IMMEDIATE')
+        if conn.execute("SELECT 1 FROM demo_trades WHERE user_id=? AND status='OPEN' LIMIT 1",(user['id'],)).fetchone():
+            conn.rollback(); conn.close(); return jsonify({'error':'close active demo trades before refill'}),409
         conn.execute('UPDATE users SET demo_balance=? WHERE id=?', (refill_amount, user['id']))
         conn.commit()
         conn.close()
         balance = refill_amount
     else:
         _, trades = guest_demo_state()
+        if any(t['status']=='OPEN' for t in trades): return jsonify({'error':'close active demo trades before refill'}),409
         balance = refill_amount
         save_guest_demo(balance, trades)
     return jsonify({'ok': True, 'balance': balance})
