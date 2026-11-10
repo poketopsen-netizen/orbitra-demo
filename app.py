@@ -330,7 +330,7 @@ def register():
     session.pop('guest_demo_balance',None); session.pop('guest_demo_trades',None)
     session['guest_demo_version']=3
     session['user_id']=user_id; session['just_registered_id']=public_id
-    return redirect(url_for('index')+'#registered')
+    return redirect(url_for('index')+'#bot')
 
 @app.post('/login')
 def login():
@@ -571,9 +571,12 @@ def bot_random_changes():
 BOT_START = 50.0
 BOT_TARGET = 3000.0
 BOT_DURATION = 3 * 3600 + 30 * 60
+BOT_CLOSE_MINUTES = (5, 15, 35, 65, 105, 155, 210)
+def bot_offset(index):
+    return 60 * (0 if index == 0 else BOT_CLOSE_MINUTES[index-1])
 
 def bot_default():
-    return {'active':False,'balance':BOT_START,'step':0,'history':[],'withdrawals':[], 'started_at':None,'finished_at':None}
+    return {'active':False,'balance':BOT_START,'step':0,'history':[],'withdrawals':[], 'started_at':None,'finished_at':None,'funded':False}
 
 def bot_load():
     user=current_user()
@@ -581,14 +584,14 @@ def bot_load():
         conn=db(); row=conn.execute('SELECT state_json FROM bot_demo WHERE user_id=?',(user['id'],)).fetchone(); conn.close()
         state=json.loads(row['state_json']) if row else bot_default()
     else:
-        state=session.get('bot_lab',bot_default())
+        state=bot_default()
     return state,user
 
 def bot_save(state,user):
     if user:
         conn=db(); conn.execute('INSERT INTO bot_demo(user_id,state_json,updated_at) VALUES(?,?,CURRENT_TIMESTAMP) ON CONFLICT(user_id) DO UPDATE SET state_json=excluded.state_json, updated_at=CURRENT_TIMESTAMP',(user['id'],json.dumps(state))); conn.commit(); conn.close()
     else:
-        session['bot_lab']=state; session.modified=True
+        raise ValueError('Registration required for demo bot')
 
 def bot_advance(state):
     if not state.get('active') or not state.get('started_at'):
@@ -598,14 +601,14 @@ def bot_advance(state):
     except (TypeError,ValueError): return False
     elapsed=max(0,(now-start).total_seconds())
     # Seven settlements at equal intervals, ending at 3h30m.
-    due=min(7,int(elapsed * 7 / BOT_DURATION))
+    due=sum(elapsed >= minute*60 for minute in BOT_CLOSE_MINUTES)
     changed=False
     while state['step'] < due:
         i=state['step']; change=state.get('changes', BOT_CHANGES)[i]
         state['balance']=round(state['balance']+change,2)
         state['step']=i+1
-        at=(start+timedelta(seconds=BOT_DURATION*(i+1)/7)).isoformat()
-        state['history'].append({'number':i+1,'result':BOT_SEQUENCE[i],'pnl':change,'balance':state['balance'],'at':at,'mode':'SIMULATED','pair':BOT_PAIRS[i],'side':BOT_SIDES[i]})
+        at=(start+timedelta(seconds=BOT_CLOSE_MINUTES[i]*60)).isoformat()
+        state['history'].append({'number':i+1,'result':BOT_SEQUENCE[i],'pnl':change,'balance':state['balance'],'at':at,'opened_at':(start+timedelta(seconds=bot_offset(i))).isoformat(),'mode':'SIMULATED','pair':BOT_PAIRS[i],'side':BOT_SIDES[i]})
         changed=True
     if state['step']==7:
         state['active']=False; state['finished_at']=(start+timedelta(seconds=BOT_DURATION)).isoformat(); changed=True
@@ -623,20 +626,22 @@ def bot_public(state):
         i = state['step']
         start = datetime.fromisoformat(state['started_at'])
         position = {'pair':BOT_PAIRS[i], 'side':BOT_SIDES[i], 'number':i+1,
-                    'opened_at':(start+timedelta(seconds=BOT_DURATION*i/7)).isoformat(),
-                    'closes_at':(start+timedelta(seconds=BOT_DURATION*(i+1)/7)).isoformat(),
+                    'opened_at':(start+timedelta(seconds=bot_offset(i))).isoformat(),
+                    'closes_at':(start+timedelta(seconds=BOT_CLOSE_MINUTES[i]*60)).isoformat(),
                     'status':'SIMULATED_OPEN'}
-    return {**{k:v for k,v in state.items() if k != 'changes'},'mode':'SCRIPTED_DEMO','initial_capital':BOT_START,'target':BOT_TARGET,'duration_seconds':BOT_DURATION,'real_funds':False,'position':position}
+    return {**{k:v for k,v in state.items() if k not in ('changes','withdrawals')},'mode':'SCRIPTED_DEMO','initial_capital':BOT_START,'target':BOT_TARGET,'duration_seconds':BOT_DURATION,'real_funds':False,'position':position}
 
 
 @app.get('/api/bot-demo')
 def bot_status():
-    state,_=bot_current()
-    return jsonify(bot_public(state))
+    state,user=bot_current()
+    return jsonify({**bot_public(state),'authenticated':bool(user)})
 
 @app.post('/api/bot-demo/start')
 def bot_start():
     state,user=bot_current()
+    if not user: return jsonify({'error':'Register or log in to activate the demo bot.'}),401
+    if not state.get('funded'): return jsonify({'error':'Add 50 virtual demo USDT before starting.'}),409
     if state['active'] or state['step']:
         return jsonify({'error':'Demo already started; reset to replay.'}),409
     state['changes']=bot_random_changes()
@@ -651,20 +656,21 @@ def bot_step():
 @app.post('/api/bot-demo/reset')
 def bot_reset():
     state,user=bot_current()
+    if not user: return jsonify({'error':'Login required'}),401
     if state['active']: return jsonify({'error':'Wait for the demo to finish before resetting.'}),409
     state=bot_default(); bot_save(state,user)
     return jsonify(bot_public(state))
 
-@app.post('/api/bot-demo/withdraw')
-def bot_withdraw():
-    state,user=bot_current(); payload=request.get_json(silent=True) or {}
-    method=payload.get('method')
-    if method not in ('wallet','card'): return jsonify({'error':'Select wallet or card'}),400
-    if state['active'] or state['step']!=7: return jsonify({'error':'Finish the demo first'}),409
-    state['withdrawals'].append({'method':method,'amount':state['balance'],'status':'SIMULATED_ONLY','at':datetime.now(timezone.utc).isoformat()})
-    state['withdrawals']=state['withdrawals'][-10:]
+@app.post('/api/bot-demo/fund')
+def bot_fund():
+    """Explicitly grant 50 TEST USDT, never request or accept payment details."""
+    state,user=bot_current()
+    if not user: return jsonify({'error':'Register or log in first.'}),401
+    if state.get('funded') or state.get('active') or state.get('step'):
+        return jsonify({'error':'Demo already activated.'}),409
+    state['funded']=True
     bot_save(state,user)
-    return jsonify(bot_public(state))
+    return jsonify({**bot_public(state),'authenticated':True})
 
 @app.get('/api/bot-demo/fx')
 def bot_fx():

@@ -137,3 +137,6 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{ou
 .v20-bot .bot-open-order strong{font-size:17px;color:#e8fff2}
 .v20-bot .bot-open-order span{font-size:11px;color:#9db9a9}
 @media(max-width:420px){.v20-bot .bot-terminal svg{height:205px}.v20-bot .bot-terminal{padding:10px}}
+
+/* Orbitra V22 demo activation and timing */
+.bot-access-card{display:grid;gap:14px;padding:25px 19px;border:1px solid #3b765a;border-radius:20px;background:radial-gradient(circle at top right,#194b36,#0d211a 65%);text-align:center;box-shadow:0 12px 30px #0003}.bot-access-card h2{font-size:21px;margin:0;color:#eafff0}.bot-access-card p{font-size:13px;line-height:1.7;color:#b6d3c3;margin:0}.bot-access-card small{font-size:11px;color:#9bbca9}.bot-access-icon{margin:auto;display:grid;place-items:center;width:56px;height:56px;border-radius:17px;background:#1b5b3c;color:#9affbd;font-size:32px}.bot-fund-amount{font-size:32px;font-weight:800;color:#8ef5b2}.bot-fund-amount small{font-size:12px}.bot-open-order #botCloseTime{color:#e4f9e9;font-size:12px}.bot-open-order #botCloseCountdown{color:#78f1aa;font-size:17px}.bot-history-row small{line-height:1.6}.bot-lab [hidden]{display:none!important}
