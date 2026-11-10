@@ -144,6 +144,7 @@ def init_db():
             conn.execute('UPDATE users SET last_name=? WHERE id=?', ('Orbitra', row['id']))
     conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_public_id ON users(public_id)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_trades_user_status ON demo_trades(user_id, status)')
+    conn.execute('''CREATE TABLE IF NOT EXISTS bot_demo (user_id INTEGER PRIMARY KEY, state_json TEXT NOT NULL, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(user_id) REFERENCES users(id))''')
     conn.commit(); conn.close()
 
 
@@ -530,6 +531,90 @@ def close_trade(trade_id):
                 t['status']='CLOSED'; t['exit_price']=price; t['closed_at']=datetime.now(timezone.utc).isoformat(); break
         balance=float(balance)+settlement; save_guest_demo(balance,trades)
     return jsonify({'ok':True,'exit_price':price,**result,'balance':balance,'authenticated':bool(user)})
+
+
+# Orbitra Bot Lab: a transparent scripted simulator, NOT an exchange execution engine.
+BOT_SEQUENCE = ['WIN','LOSS','WIN','LOSS','LOSS','WIN','WIN']
+BOT_START = 50.0
+BOT_STAKE = 5.0
+BOT_PNL = 5.0
+
+def bot_default():
+    return {'active':False,'balance':BOT_START,'step':0,'history':[],'withdrawals':[],'currency':'USD'}
+
+def bot_load():
+    user=current_user()
+    if user:
+        conn=db(); row=conn.execute('SELECT state_json FROM bot_demo WHERE user_id=?',(user['id'],)).fetchone(); conn.close()
+        return (json.loads(row['state_json']) if row else bot_default()),user
+    return session.get('bot_lab',bot_default()),None
+
+def bot_save(state,user):
+    if user:
+        conn=db(); conn.execute('INSERT INTO bot_demo(user_id,state_json,updated_at) VALUES(?,?,CURRENT_TIMESTAMP) ON CONFLICT(user_id) DO UPDATE SET state_json=excluded.state_json, updated_at=CURRENT_TIMESTAMP',(user['id'],json.dumps(state))); conn.commit(); conn.close()
+    else:
+        session['bot_lab']=state; session.modified=True
+
+def bot_public(state):
+    return {**state,'mode':'SCRIPTED_DEMO','initial_capital':BOT_START,'target':2000,'next_result':BOT_SEQUENCE[state['step']] if state['step']<len(BOT_SEQUENCE) else None,'real_funds':False}
+
+@app.get('/api/bot-demo')
+def bot_status():
+    state,_=bot_load()
+    return jsonify(bot_public(state))
+
+@app.post('/api/bot-demo/start')
+def bot_start():
+    state,user=bot_load()
+    if state['active'] or state['step']:
+        return jsonify({'error':'Scenario already started. Reset to replay.'}),409
+    state['active']=True; bot_save(state,user)
+    return jsonify(bot_public(state))
+
+@app.post('/api/bot-demo/step')
+def bot_step():
+    state,user=bot_load()
+    if not state['active'] or state['step']>=len(BOT_SEQUENCE):
+        return jsonify({'error':'Start scenario or reset after completion'}),409
+    outcome=BOT_SEQUENCE[state['step']]
+    change=BOT_PNL if outcome=='WIN' else -BOT_PNL
+    state['balance']=round(state['balance']+change,2)
+    state['step']+=1
+    state['history'].append({'number':state['step'],'result':outcome,'stake':BOT_STAKE,'pnl':change,'balance':state['balance'],'at':datetime.now(timezone.utc).isoformat()})
+    if state['step']==len(BOT_SEQUENCE): state['active']=False
+    bot_save(state,user)
+    return jsonify(bot_public(state))
+
+@app.post('/api/bot-demo/reset')
+def bot_reset():
+    _,user=bot_load(); state=bot_default(); bot_save(state,user)
+    return jsonify(bot_public(state))
+
+@app.post('/api/bot-demo/withdraw')
+def bot_withdraw():
+    state,user=bot_load(); payload=request.get_json(silent=True) or {}
+    method=payload.get('method')
+    if method not in ('wallet','card'): return jsonify({'error':'Select wallet or card'}),400
+    if state['active']: return jsonify({'error':'Finish or reset scenario first'}),409
+    if not state['history']: return jsonify({'error':'Run scenario first'}),409
+    # No address or card data is collected; no balance debit or payout takes place.
+    state['withdrawals'].append({'method':method,'amount':state['balance'],'status':'SIMULATED_ONLY','at':datetime.now(timezone.utc).isoformat()})
+    state['withdrawals']=state['withdrawals'][-10:]
+    bot_save(state,user)
+    return jsonify(bot_public(state))
+
+@app.get('/api/bot-demo/fx')
+def bot_fx():
+    currency=(request.args.get('currency') or 'USD').upper()
+    if currency not in ('USD','EUR','GBP','RUB','KZT','UAH','BRL','INR','JPY','TRY','AED','CAD','AUD'):
+        return jsonify({'error':'Unsupported currency'}),400
+    if currency=='USD': return jsonify({'currency':'USD','rate':1,'date':datetime.now(timezone.utc).date().isoformat(),'source':'Illustrative 1 USDT ≈ 1 USD (not an exchange quote)','estimated':True})
+    try:
+        data=http_json('https://api.frankfurter.dev/v1/latest?base=USD&symbols='+currency,timeout=4)
+        rate=data['rates'][currency]
+        return jsonify({'currency':currency,'rate':rate,'date':data.get('date'),'source':'Frankfurter / reference exchange-rate data; 1 USDT ≈ 1 USD assumption','estimated':True})
+    except Exception:
+        return jsonify({'error':'Reference FX rate unavailable; no estimate shown'}),503
 
 init_db()
 
