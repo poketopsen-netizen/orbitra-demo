@@ -92,6 +92,7 @@ def browser_language():
 def db():
     conn = sqlite3.connect(DB_PATH, timeout=20)
     conn.execute('PRAGMA busy_timeout=20000')
+    conn.execute('PRAGMA foreign_keys=ON')
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -442,10 +443,12 @@ def list_trades():
             try:
                 if r['symbol'] not in prices: prices[r['symbol']]=fetch_ticker(r['symbol'])['price']
                 current=prices[r['symbol']]
-            except Exception: current=r['entry_price']
-        live_result=training_result(r,current)
-        out.append({'id':r['id'],'symbol':r['symbol'],'side':r['side'],'quantity':r['quantity'],'stake':live_result['stake'],'entry_price':r['entry_price'],'current_price':current,'market_direction':live_result['market_direction'],'projected_result':live_result['result'],'projected_profit':live_result['profit'],'status':r['status'],'opened_at':r.get('opened_at'),'closed_at':r.get('closed_at'),'seconds_left':seconds_left(r.get('opened_at')) if r['status']=='OPEN' else 0})
-    return jsonify({'balance':balance,'trades':out,'authenticated':bool(user),'auto_closed':auto_closed,'duration_seconds':TRADE_DURATION_SECONDS})
+            except Exception: current=None
+        live_result=training_result(r,current) if current is not None else None
+        out.append({'id':r['id'],'symbol':r['symbol'],'side':r['side'],'quantity':r['quantity'],'stake':live_result['stake'],'entry_price':r['entry_price'],'current_price':current,'market_direction':live_result['market_direction'] if live_result else 'UNKNOWN','projected_result':live_result['result'] if live_result else 'PENDING','projected_profit':live_result['profit'] if live_result else None,'status':r['status'],'opened_at':r.get('opened_at'),'closed_at':r.get('closed_at'),'seconds_left':seconds_left(r.get('opened_at')) if r['status']=='OPEN' else 0})
+    closed=[t for t in out if t['status']=='CLOSED']
+    summary={'total':len(closed),'wins':sum(t['projected_result']=='WIN' for t in closed),'losses':sum(t['projected_result']=='LOSS' for t in closed),'open':sum(t['status']=='OPEN' for t in out),'net_profit':round(sum(float(t['projected_profit'] or 0) for t in closed),2)}
+    return jsonify({'balance':balance,'trades':out,'summary':summary,'authenticated':bool(user),'auto_closed':auto_closed,'duration_seconds':TRADE_DURATION_SECONDS})
 
 @app.post('/api/demo/trades')
 def open_trade():
@@ -514,7 +517,11 @@ def close_trade(trade_id):
     stake=result['stake']
     settlement=result['settlement']
     if user:
-        conn.execute("UPDATE demo_trades SET status='CLOSED',exit_price=?,closed_at=CURRENT_TIMESTAMP WHERE id=?",(price,trade_id))
+        conn.execute('BEGIN IMMEDIATE')
+        updated=conn.execute("UPDATE demo_trades SET status='CLOSED',exit_price=?,closed_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=? AND status='OPEN'",(price,trade_id,user['id']))
+        if updated.rowcount != 1:
+            conn.rollback(); conn.close()
+            return jsonify({'error':'trade already closed'}),409
         conn.execute('UPDATE users SET demo_balance=demo_balance+? WHERE id=?',(settlement,user['id']))
         conn.commit(); balance=conn.execute('SELECT demo_balance FROM users WHERE id=?',(user['id'],)).fetchone()['demo_balance']; conn.close()
     else:

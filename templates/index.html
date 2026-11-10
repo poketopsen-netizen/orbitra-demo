@@ -30,10 +30,10 @@
     </header>
 
     <section class="ticker">
-      <div><small>MARKET</small><b>$3.27T</b></div>
-      <div><small>BTC</small><b>$97,234</b></div>
-      <div><small>ETH</small><b>$3,421</b></div>
-      <div class="status"><i></i><span>Live</span></div>
+      <div><small>MODE</small><b>DEMO</b></div>
+      <div><small>MARKETS</small><b>14 pairs</b></div>
+      <div><small>TRADES</small><b>10 sec</b></div>
+      <div class="status"><i></i><span>Practice</span></div>
     </section>
 
     <section class="activity-tape" aria-label="Demo activity">
@@ -59,7 +59,7 @@
          data-has-password="{{ '1' if user and user['password_hash'] else '0' }}"
          data-new-id="{{ just_registered_id }}"></div>
 
-    <nav class="bottom-nav">
+    <nav class="bottom-nav" aria-label="Primary navigation">
       <button data-route="home" class="nav-item active"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10.5V20h13V10.5"/><path d="M10 20v-5h4v5"/></svg></span><small data-nav="home">Главная</small></button>
       <button data-route="markets" class="nav-item"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><rect x="3.5" y="11" width="4" height="8" rx="1.2"/><rect x="10" y="7" width="4" height="12" rx="1.2"/><rect x="16.5" y="4" width="4" height="15" rx="1.2"/></svg></span><small data-nav="markets">Активы</small></button>
       <button data-route="trade" class="nav-item trade-action"><span class="trade-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h11l-3-3"/><path d="m18 7-3 3"/><path d="M17 17H6l3 3"/><path d="m6 17 3-3"/></svg></span><small data-nav="trade">Торговать</small></button>
