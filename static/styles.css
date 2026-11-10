@@ -127,3 +127,13 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{ou
 
 /* V20: simulated trading terminal */
 .v20-bot .bot-position{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px;border:1px solid #284f3d;border-radius:14px;background:#0a1b16}.v20-bot .bot-position small{display:block;color:#8aab9c;font-size:10px;margin-bottom:6px}.v20-bot .bot-position strong{font-size:21px;color:#f1fff7}.v20-bot .bot-side{font-size:11px;font-weight:900;letter-spacing:.07em;border-radius:9px;padding:8px 11px;background:#19372a;color:#70efa7}.v20-bot .bot-side.short{background:#3c2227;color:#ff9ba3}.v20-bot .bot-terminal{padding:12px;border:1px solid #244537;border-radius:15px;background:radial-gradient(circle at 60% 15%,#123326,#07140f 75%)}.v20-bot .bot-terminal-top{display:flex;justify-content:space-between;gap:8px;font-size:10px;color:#a0c4b0}.v20-bot .bot-terminal-top span:last-child{color:#70efa7;font-weight:800}.v20-bot .bot-terminal svg{height:190px;background:transparent}.v20-bot .bot-gridlines path{fill:none;stroke:#2c4b3c;stroke-width:.7;stroke-dasharray:4 5}.v20-bot .bot-chart-note{font-size:10px;color:#7d9b8c}.v20-bot .bot-history-row{align-items:center;gap:12px}.v20-bot .bot-history-row span{min-width:0}.v20-bot .bot-history-row span>b{display:block;color:#dff8e8}.v20-bot .bot-history-row small{display:block;margin-top:5px}.v20-bot .bot-history-row>b{white-space:nowrap}.v20-bot .bot-visual-header h2{font-size:16px}
+
+/* V21: exchange-style DEMO chart and active order */
+.v20-bot .bot-terminal{background:linear-gradient(160deg,#0b211b,#07130f 75%);border-color:#32624e;box-shadow:inset 0 1px rgba(115,244,175,.08)}
+.v20-bot .bot-terminal svg{height:235px;width:100%;display:block;background:linear-gradient(180deg,rgba(46,127,91,.10),transparent)}
+.v20-bot .bot-chart-toolbar{display:flex;justify-content:space-between;gap:8px;color:#8fbda6;font-size:9px;letter-spacing:.05em;margin:10px 0 6px}
+.v20-bot .bot-open-order{margin-top:14px;padding:15px;border:1px solid #357a59;border-left:4px solid #70efa7;border-radius:13px;background:linear-gradient(100deg,#112d22,#0b1c16);display:flex;flex-direction:column;gap:7px}
+.v20-bot .bot-open-order small{font-size:10px;color:#90c6aa;letter-spacing:.06em}
+.v20-bot .bot-open-order strong{font-size:17px;color:#e8fff2}
+.v20-bot .bot-open-order span{font-size:11px;color:#9db9a9}
+@media(max-width:420px){.v20-bot .bot-terminal svg{height:205px}.v20-bot .bot-terminal{padding:10px}}
