@@ -535,6 +535,8 @@ def close_trade(trade_id):
 
 # Scripted, clearly labelled demo. No market orders, real funds, or payouts.
 BOT_SEQUENCE = ['WIN','LOSS','WIN','LOSS','LOSS','WIN','WIN']
+BOT_PAIRS = ['BTC/USDT','ETH/USDT','SOL/USDT','BTC/USDT','ETH/USDT','SOL/USDT','BTC/USDT']
+BOT_SIDES = ['LONG','SHORT','LONG','SHORT','LONG','LONG','SHORT']
 # Legacy schedule is retained only for demos started before this update.
 BOT_CHANGES = [775.0,-50.0,775.0,-50.0,-50.0,775.0,775.0]
 
@@ -603,7 +605,7 @@ def bot_advance(state):
         state['balance']=round(state['balance']+change,2)
         state['step']=i+1
         at=(start+timedelta(seconds=BOT_DURATION*(i+1)/7)).isoformat()
-        state['history'].append({'number':i+1,'result':BOT_SEQUENCE[i],'pnl':change,'balance':state['balance'],'at':at,'mode':'SIMULATED'})
+        state['history'].append({'number':i+1,'result':BOT_SEQUENCE[i],'pnl':change,'balance':state['balance'],'at':at,'mode':'SIMULATED','pair':BOT_PAIRS[i],'side':BOT_SIDES[i]})
         changed=True
     if state['step']==7:
         state['active']=False; state['finished_at']=(start+timedelta(seconds=BOT_DURATION)).isoformat(); changed=True
@@ -615,7 +617,17 @@ def bot_current():
     return state,user
 
 def bot_public(state):
-    return {**{k:v for k,v in state.items() if k != 'changes'},'mode':'SCRIPTED_DEMO','initial_capital':BOT_START,'target':BOT_TARGET,'duration_seconds':BOT_DURATION,'real_funds':False}
+    # Only reveal the current simulated position, never future results or P/L.
+    position = None
+    if state.get('active') and state.get('started_at') and state.get('step',0) < 7:
+        i = state['step']
+        start = datetime.fromisoformat(state['started_at'])
+        position = {'pair':BOT_PAIRS[i], 'side':BOT_SIDES[i], 'number':i+1,
+                    'opened_at':(start+timedelta(seconds=BOT_DURATION*i/7)).isoformat(),
+                    'closes_at':(start+timedelta(seconds=BOT_DURATION*(i+1)/7)).isoformat(),
+                    'status':'SIMULATED_OPEN'}
+    return {**{k:v for k,v in state.items() if k != 'changes'},'mode':'SCRIPTED_DEMO','initial_capital':BOT_START,'target':BOT_TARGET,'duration_seconds':BOT_DURATION,'real_funds':False,'position':position}
+
 
 @app.get('/api/bot-demo')
 def bot_status():
