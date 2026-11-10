@@ -8,7 +8,7 @@ import os
 import math
 import ipaddress
 from pathlib import Path
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -533,21 +533,54 @@ def close_trade(trade_id):
     return jsonify({'ok':True,'exit_price':price,**result,'balance':balance,'authenticated':bool(user)})
 
 
-# Orbitra Bot Lab: a transparent scripted simulator, NOT an exchange execution engine.
+# Scripted, clearly labelled demo. No market orders, real funds, or payouts.
 BOT_SEQUENCE = ['WIN','LOSS','WIN','LOSS','LOSS','WIN','WIN']
+# Legacy schedule is retained only for demos started before this update.
+BOT_CHANGES = [775.0,-50.0,775.0,-50.0,-50.0,775.0,775.0]
+
+def bot_random_changes():
+    """Generate a varied, precomputed SIMULATED ledger, never market returns.
+
+    Seven entries, fixed win/loss order, exact 3000 USDT final demo balance.
+    The random ledger is stored once at start so refreshes cannot reroll it.
+    """
+    rng = secrets.SystemRandom()
+    losses = [rng.randrange(65, 151), rng.randrange(75, 171), rng.randrange(85, 191)]
+    # All losses are visibly different, with larger drawdowns than V18.
+    while len(set(losses)) != 3:
+        losses = [rng.randrange(65, 151), rng.randrange(75, 171), rng.randrange(85, 191)]
+    total_wins = int(BOT_TARGET - BOT_START + sum(losses))
+    # Keep early wins sufficient to fund later losses without negative balance.
+    while True:
+        w1 = rng.randrange(370, 651)
+        w2 = rng.randrange(480, 851)
+        w3 = rng.randrange(550, 1051)
+        w4 = total_wins - w1 - w2 - w3
+        wins = [w1, w2, w3, w4]
+        if w4 >= 350 and len(set(wins)) == 4 and all(w not in losses for w in wins):
+            break
+    result = [w1, -losses[0], w2, -losses[1], -losses[2], w3, w4]
+    assert sum(result) == int(BOT_TARGET - BOT_START)
+    running = BOT_START
+    for change in result:
+        running += change
+        assert running >= 0
+    return result
 BOT_START = 50.0
-BOT_STAKE = 5.0
-BOT_PNL = 5.0
+BOT_TARGET = 3000.0
+BOT_DURATION = 3 * 3600 + 30 * 60
 
 def bot_default():
-    return {'active':False,'balance':BOT_START,'step':0,'history':[],'withdrawals':[],'currency':'USD'}
+    return {'active':False,'balance':BOT_START,'step':0,'history':[],'withdrawals':[], 'started_at':None,'finished_at':None}
 
 def bot_load():
     user=current_user()
     if user:
         conn=db(); row=conn.execute('SELECT state_json FROM bot_demo WHERE user_id=?',(user['id'],)).fetchone(); conn.close()
-        return (json.loads(row['state_json']) if row else bot_default()),user
-    return session.get('bot_lab',bot_default()),None
+        state=json.loads(row['state_json']) if row else bot_default()
+    else:
+        state=session.get('bot_lab',bot_default())
+    return state,user
 
 def bot_save(state,user):
     if user:
@@ -555,49 +588,67 @@ def bot_save(state,user):
     else:
         session['bot_lab']=state; session.modified=True
 
+def bot_advance(state):
+    if not state.get('active') or not state.get('started_at'):
+        return False
+    now=datetime.now(timezone.utc)
+    try: start=datetime.fromisoformat(state['started_at'])
+    except (TypeError,ValueError): return False
+    elapsed=max(0,(now-start).total_seconds())
+    # Seven settlements at equal intervals, ending at 3h30m.
+    due=min(7,int(elapsed * 7 / BOT_DURATION))
+    changed=False
+    while state['step'] < due:
+        i=state['step']; change=state.get('changes', BOT_CHANGES)[i]
+        state['balance']=round(state['balance']+change,2)
+        state['step']=i+1
+        at=(start+timedelta(seconds=BOT_DURATION*(i+1)/7)).isoformat()
+        state['history'].append({'number':i+1,'result':BOT_SEQUENCE[i],'pnl':change,'balance':state['balance'],'at':at,'mode':'SIMULATED'})
+        changed=True
+    if state['step']==7:
+        state['active']=False; state['finished_at']=(start+timedelta(seconds=BOT_DURATION)).isoformat(); changed=True
+    return changed
+
+def bot_current():
+    state,user=bot_load()
+    if bot_advance(state): bot_save(state,user)
+    return state,user
+
 def bot_public(state):
-    return {**state,'mode':'SCRIPTED_DEMO','initial_capital':BOT_START,'target':2000,'next_result':BOT_SEQUENCE[state['step']] if state['step']<len(BOT_SEQUENCE) else None,'real_funds':False}
+    return {**{k:v for k,v in state.items() if k != 'changes'},'mode':'SCRIPTED_DEMO','initial_capital':BOT_START,'target':BOT_TARGET,'duration_seconds':BOT_DURATION,'real_funds':False}
 
 @app.get('/api/bot-demo')
 def bot_status():
-    state,_=bot_load()
+    state,_=bot_current()
     return jsonify(bot_public(state))
 
 @app.post('/api/bot-demo/start')
 def bot_start():
-    state,user=bot_load()
+    state,user=bot_current()
     if state['active'] or state['step']:
-        return jsonify({'error':'Scenario already started. Reset to replay.'}),409
-    state['active']=True; bot_save(state,user)
+        return jsonify({'error':'Demo already started; reset to replay.'}),409
+    state['changes']=bot_random_changes()
+    state['active']=True; state['started_at']=datetime.now(timezone.utc).isoformat()
+    bot_save(state,user)
     return jsonify(bot_public(state))
 
 @app.post('/api/bot-demo/step')
 def bot_step():
-    state,user=bot_load()
-    if not state['active'] or state['step']>=len(BOT_SEQUENCE):
-        return jsonify({'error':'Start scenario or reset after completion'}),409
-    outcome=BOT_SEQUENCE[state['step']]
-    change=BOT_PNL if outcome=='WIN' else -BOT_PNL
-    state['balance']=round(state['balance']+change,2)
-    state['step']+=1
-    state['history'].append({'number':state['step'],'result':outcome,'stake':BOT_STAKE,'pnl':change,'balance':state['balance'],'at':datetime.now(timezone.utc).isoformat()})
-    if state['step']==len(BOT_SEQUENCE): state['active']=False
-    bot_save(state,user)
-    return jsonify(bot_public(state))
+    return jsonify({'error':'Trades settle automatically on the demo schedule.'}),405
 
 @app.post('/api/bot-demo/reset')
 def bot_reset():
-    _,user=bot_load(); state=bot_default(); bot_save(state,user)
+    state,user=bot_current()
+    if state['active']: return jsonify({'error':'Wait for the demo to finish before resetting.'}),409
+    state=bot_default(); bot_save(state,user)
     return jsonify(bot_public(state))
 
 @app.post('/api/bot-demo/withdraw')
 def bot_withdraw():
-    state,user=bot_load(); payload=request.get_json(silent=True) or {}
+    state,user=bot_current(); payload=request.get_json(silent=True) or {}
     method=payload.get('method')
     if method not in ('wallet','card'): return jsonify({'error':'Select wallet or card'}),400
-    if state['active']: return jsonify({'error':'Finish or reset scenario first'}),409
-    if not state['history']: return jsonify({'error':'Run scenario first'}),409
-    # No address or card data is collected; no balance debit or payout takes place.
+    if state['active'] or state['step']!=7: return jsonify({'error':'Finish the demo first'}),409
     state['withdrawals'].append({'method':method,'amount':state['balance'],'status':'SIMULATED_ONLY','at':datetime.now(timezone.utc).isoformat()})
     state['withdrawals']=state['withdrawals'][-10:]
     bot_save(state,user)
@@ -605,16 +656,7 @@ def bot_withdraw():
 
 @app.get('/api/bot-demo/fx')
 def bot_fx():
-    currency=(request.args.get('currency') or 'USD').upper()
-    if currency not in ('USD','EUR','GBP','RUB','KZT','UAH','BRL','INR','JPY','TRY','AED','CAD','AUD'):
-        return jsonify({'error':'Unsupported currency'}),400
-    if currency=='USD': return jsonify({'currency':'USD','rate':1,'date':datetime.now(timezone.utc).date().isoformat(),'source':'Illustrative 1 USDT ≈ 1 USD (not an exchange quote)','estimated':True})
-    try:
-        data=http_json('https://api.frankfurter.dev/v1/latest?base=USD&symbols='+currency,timeout=4)
-        rate=data['rates'][currency]
-        return jsonify({'currency':currency,'rate':rate,'date':data.get('date'),'source':'Frankfurter / reference exchange-rate data; 1 USDT ≈ 1 USD assumption','estimated':True})
-    except Exception:
-        return jsonify({'error':'Reference FX rate unavailable; no estimate shown'}),503
+    return jsonify({'error':'FX preview removed from bot view'}),410
 
 init_db()
 
