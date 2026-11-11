@@ -191,3 +191,34 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{ou
 .bottom-nav .nav-item small{font-size:clamp(9px,2.7vw,11px)!important}
 .wallet-real .btn, .real-balance .btn, #walletDeposit, #walletTopup, [data-demo-topup]{background:#70efa7!important;color:#052014!important;font-weight:850!important;border:1px solid #8affb6!important;box-shadow:0 8px 26px rgba(112,239,167,.18)!important}
 .real-balance-card #openDepositDemo{background:#70efa7!important;color:#052014!important;font-weight:900!important;border:1px solid #8affb6!important;box-shadow:0 9px 26px rgba(112,239,167,.23)!important}
+
+/* V34 — iPhone layout, navigation, and demo approval status */
+html,body{max-width:100%;overflow-x:hidden}
+.topbar-v13{display:flex;gap:8px;min-width:0;padding-inline:12px}
+.topbar-v13 .brand{flex:0 0 auto;min-width:0;gap:7px;font-size:clamp(16px,4vw,20px)}
+.topbar-v13 .brand-mark{width:31px;height:31px;flex-shrink:0}
+.topbar-v13 .topbar-actions{flex:1 1 auto;min-width:0;justify-content:flex-end;gap:6px}
+.topbar-v13 .language-control{min-width:0;flex:0 1 124px;max-width:124px;padding:0 6px}
+.topbar-v13 .language-control select{width:100%;max-width:100%;min-width:0;font-size:11px;padding-right:0}
+.topbar-v13 .language-globe{display:none!important}
+.topbar-v13 .top-auth-btn{flex:0 0 auto;padding:0 8px;font-size:11px;max-width:80px;overflow:hidden}
+.topbar-v13 #menuBtn{flex:0 0 38px;width:38px;height:38px}
+@media(max-width:360px){.topbar-v13{padding-inline:8px;gap:4px}.topbar-v13 .brand{font-size:16px}.topbar-v13 .language-control{max-width:104px}.topbar-v13 .top-auth-btn{max-width:65px;padding:0 5px;font-size:10px}}
+.bottom-nav{grid-template-columns:repeat(5,minmax(0,1fr))!important;gap:0!important;justify-items:stretch}
+.bottom-nav>.nav-item{width:100%;min-width:0;flex:none!important;justify-self:stretch;align-items:center;text-align:center;padding:5px 0}
+.bottom-nav>.trade-action{grid-column:2!important;justify-self:center!important;transform:none!important}
+.bottom-nav .nav-item small{max-width:100%;white-space:nowrap;font-size:clamp(9px,2.6vw,11px)!important}
+.bottom-nav .trade-nav-icon{margin-left:auto!important;margin-right:auto!important;display:grid!important;place-items:center!important}
+.drawer{box-sizing:border-box;height:100dvh;max-height:100dvh;overflow:hidden;padding-bottom:max(14px,env(safe-area-inset-bottom))}
+.drawer-head{flex:0 0 auto;min-height:55px}
+.drawer-links{display:block;min-height:0;flex:1 1 auto;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;margin-top:14px;padding-bottom:20px;scrollbar-width:thin}
+.drawer-links button{width:100%;min-height:54px;flex-shrink:0}
+.drawer-actions{flex:0 0 auto;margin-top:8px;margin-bottom:0;padding:8px 0 max(6px,env(safe-area-inset-bottom));background:#091512}
+.v34-payment-progress{margin-top:13px;padding:15px 13px;border:1px solid #35634f;border-radius:16px;background:#102b20;text-align:left;color:#e6fff0}
+.v34-payment-progress strong{display:block;font-size:15px;line-height:1.4}
+.v34-payment-progress p{font-size:12px;line-height:1.55;margin:7px 0 0;color:#b9d7c9}
+.v34-payment-progress.approved{border-color:#70efa7;background:#103522}
+.v34-payment-progress.approved strong{color:#70efa7}
+.v34-payment-progress.rejected{border-color:#ab6570;background:#301c20}
+.v34-payment-progress.rejected strong{color:#ff9eaa}
+.v34-payment-progress[hidden]{display:none!important}
