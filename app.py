@@ -820,18 +820,24 @@ def admin_geo(actor):
     lines += [f"{r['country']} · {r['method']} · {r['label']}" for r in rows]
     telegram_send(actor,'\n'.join(lines),admin_menu())
 
+CRYPTO_DEFAULTS = [('USDT','TRC20'),('BTC','BITCOIN'),('ETH','ERC20'),('USDC','ERC20'),('SOL','SOLANA')]
+
 def admin_crypto(actor):
     conn=db()
-    rows=conn.execute("SELECT method,label,details FROM geo_demo_methods WHERE country='ALL' AND method LIKE 'crypto:%' ORDER BY method").fetchall()
+    rows=conn.execute("SELECT method,details FROM geo_demo_methods WHERE country='ALL' AND method LIKE 'crypto:%'").fetchall()
     conn.close()
-    lines=['🪙 КРИПТОВАЛЮТЫ · ВСЕ СТРАНЫ (DEMO)',
-           'Добавить/изменить тестовый адрес:',
-           '/crypto USDT TRC20 | USDT · TRC20 | Тестовый адрес: SAMPLE-USDT',
-           '/crypto BTC BITCOIN | Bitcoin | Тестовый адрес: SAMPLE-BTC',
-           'Удалить: /cryptodel USDT TRC20',
-           'Настройки общие для всех ГЕО. Только учебные адреса, не отправляйте реальные средства.', '']
-    lines += [f"{r['method']} · {r['label']} · {r['details']}" for r in rows]
-    telegram_send(actor,'\n'.join(lines),admin_menu())
+    stored={r['method']:r['details'] for r in rows}
+    buttons=[]
+    lines=['🪙 Криптовалюты · адреса для всех стран',
+           'Выберите валюту кнопкой ниже, чтобы заменить только её учебный адрес.',
+           'Реальные кошельки и переводы в DEMO-версии не поддерживаются.']
+    for cur,network in CRYPTO_DEFAULTS:
+        key=f'crypto:{cur}:{network}'
+        state='✓' if key in stored else '○'
+        buttons.append([{'text':f'{state} {cur} · {network}', 'callback_data':f'cedit:{cur}:{network}'}])
+    buttons.extend(admin_menu())
+    telegram_send(actor,'\n'.join(lines),buttons)
+
 
 def deposit_notice(request_id, user, country):
     for admin_id in TG_ADMIN_IDS:
@@ -961,8 +967,9 @@ def demo_payment_methods():
             currency=(parts[1] if len(parts)>1 else (re.search(r'USDT|USDC|BTC|ETH|TON|TRX|BNB|SOL',r['label'],re.I) or ['USDT'])[0]).upper()
             network=(parts[2] if len(parts)>2 else (re.search(r'TRC20|ERC20|BEP20|TON|SOLANA|POLYGON|BASE',r['label'],re.I) or ['TRC20'])[0]).upper()
             methods.append({'method':'crypto','key':key,'currency':currency,'network':network,'label':r['label'],'details':r['details'],'configured':True})
-    if not any(m['method']=='crypto' for m in methods):
-        for cur,network in [('USDT','TRC20'),('BTC','BITCOIN'),('ETH','ERC20'),('USDC','ERC20'),('SOL','SOLANA')]:
+    configured_crypto={(m['currency'],m['network']) for m in methods if m['method']=='crypto'}
+    for cur,network in CRYPTO_DEFAULTS:
+        if (cur,network) not in configured_crypto:
             methods.append({'method':'crypto','key':f'crypto:{cur}:{network}','currency':cur,'network':network,'label':f'{cur} · {network} (DEMO)','details':'Тестовый адрес: DEMO-ONLY-NOT-A-WALLET','configured':False})
     if not any(m['method']=='bank' for m in methods): methods.append({'method':'bank','key':'bank','label':'Банковский перевод','details':'','configured':False})
     methods.sort(key=lambda m:(m['method']!='crypto',m.get('currency',''),m.get('network','')))
@@ -1022,6 +1029,9 @@ def telegram_webhook():
         elif payload=='menu:stats': admin_stats(actor)
         elif payload=='menu:geo': admin_geo(actor)
         elif payload=='menu:crypto': admin_crypto(actor)
+        elif re.fullmatch(r'cedit:(USDT:TRC20|BTC:BITCOIN|ETH:ERC20|USDC:ERC20|SOL:SOLANA)',payload):
+            cur,network=payload.split(':')[1:]
+            telegram_send(actor,f'✏️ {cur} · {network}\nДля замены только DEMO-адреса отправьте:\n/address {cur} {network} | Тестовый адрес: SAMPLE-ONLY\n\nНе указывайте действующий кошелёк.',admin_menu())
         elif re.fullmatch(r'user:[0-9]+',payload): admin_profile(actor,int(payload.split(':')[1]))
         elif re.fullmatch(r'balance:[0-9]+',payload):
             uid=int(payload.split(':')[1]);telegram_send(actor,f'✏️ Установить баланс пользователю #{uid}\nОтправьте сообщение:\n/setbalance {uid} 250.00\nСумма заменит текущий DEMO-баланс; операция записывается в журнал.')
@@ -1040,6 +1050,19 @@ def telegram_webhook():
                 key=f'crypto:{m.group(1).upper()}:{m.group(2).upper()}'
                 conn=db();conn.execute('INSERT INTO geo_demo_methods(country,method,label,details) VALUES(?,?,?,?) ON CONFLICT(country,method) DO UPDATE SET label=excluded.label,details=excluded.details,enabled=1',('ALL',key,m.group(3).strip(),m.group(4).strip()));admin_audit(conn,actor,'global_crypto_set',None,key);conn.commit();conn.close()
                 telegram_send(actor,'🪙 DEMO-криптовалюта сохранена для всех стран: '+key,admin_menu())
+        elif cmd=='/address':
+            m=re.fullmatch(r'/address\s+(USDT|BTC|ETH|USDC|SOL)\s+(TRC20|BITCOIN|ERC20|SOLANA)\s*\|\s*(.{1,240})',text,re.S|re.I)
+            if not m or (m.group(1).upper(),m.group(2).upper()) not in CRYPTO_DEFAULTS:
+                telegram_send(actor,'Выберите криптовалюту кнопкой в разделе 🪙 Криптовалюты.',admin_menu())
+            elif not any(x in m.group(3).lower() for x in ('тест', 'demo', 'sample')):
+                telegram_send(actor,'Допускаются только учебные адреса с пометкой Тестовый / DEMO / SAMPLE.',admin_menu())
+            else:
+                cur,network=m.group(1).upper(),m.group(2).upper()
+                key=f'crypto:{cur}:{network}'
+                details=m.group(3).strip()
+                if not re.search(r'адрес\s*:',details,re.I): details='Тестовый адрес: '+details
+                conn=db();conn.execute('INSERT INTO geo_demo_methods(country,method,label,details) VALUES(?,?,?,?) ON CONFLICT(country,method) DO UPDATE SET details=excluded.details,enabled=1',('ALL',key,f'{cur} · {network} (DEMO)',details));admin_audit(conn,actor,'crypto_address_set',None,key);conn.commit();conn.close()
+                telegram_send(actor,f'✅ Учебный адрес {cur} · {network} обновлён для всех стран.',admin_menu())
         elif cmd=='/cryptodel':
             m=re.fullmatch(r'/cryptodel\s+([A-Za-z0-9]{2,12})\s+([A-Za-z0-9]{2,20})',text)
             if not m: admin_crypto(actor)
