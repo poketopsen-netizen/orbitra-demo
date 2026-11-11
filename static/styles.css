@@ -140,3 +140,17 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{ou
 
 /* Orbitra V22 demo activation and timing */
 .bot-access-card{display:grid;gap:14px;padding:25px 19px;border:1px solid #3b765a;border-radius:20px;background:radial-gradient(circle at top right,#194b36,#0d211a 65%);text-align:center;box-shadow:0 12px 30px #0003}.bot-access-card h2{font-size:21px;margin:0;color:#eafff0}.bot-access-card p{font-size:13px;line-height:1.7;color:#b6d3c3;margin:0}.bot-access-card small{font-size:11px;color:#9bbca9}.bot-access-icon{margin:auto;display:grid;place-items:center;width:56px;height:56px;border-radius:17px;background:#1b5b3c;color:#9affbd;font-size:32px}.bot-fund-amount{font-size:32px;font-weight:800;color:#8ef5b2}.bot-fund-amount small{font-size:12px}.bot-open-order #botCloseTime{color:#e4f9e9;font-size:12px}.bot-open-order #botCloseCountdown{color:#78f1aa;font-size:17px}.bot-history-row small{line-height:1.6}.bot-lab [hidden]{display:none!important}
+
+/* V25 virtual top-up dialog */
+.v25-deposit{max-width:440px;width:min(92vw,440px);max-height:85vh;overflow-y:auto;text-align:left}
+.v25-deposit h2,.v25-deposit>p,.v25-deposit>small{text-align:center;display:block}
+.v25-method-list{display:grid;gap:10px;margin:15px 0}
+.v25-method{display:flex;align-items:flex-start;gap:12px;padding:13px;border:1px solid #2b5849;border-radius:14px;background:#10251f;cursor:pointer}
+.v25-method input{margin-top:5px;accent-color:#75e7a0}
+.v25-method span{display:grid;gap:6px;min-width:0}
+.v25-method strong{color:#dfffea;font-size:14px}
+.v25-method small{color:#a8c5bb;overflow-wrap:anywhere;line-height:1.5}
+.v25-amount-label{display:grid;gap:8px;font-size:13px;color:#a8c5bb;margin:12px 0}
+.v25-amount{padding:12px;border-radius:12px;border:1px solid #2b5849;background:#10251f;color:white;width:100%;box-sizing:border-box}
+.v25-estimate{font-size:13px;color:#8ef1b6}
+#v25Status{font-size:13px;color:#b9e5d2;margin:12px 0;line-height:1.5}

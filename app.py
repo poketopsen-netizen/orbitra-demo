@@ -156,6 +156,18 @@ def init_db():
         reviewed_at TEXT, reviewed_by TEXT
     )''')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_deposit_user ON demo_deposit_requests(user_id, status)')
+    conn.execute("""CREATE TABLE IF NOT EXISTS demo_topup_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      amount_cents INTEGER NOT NULL CHECK(amount_cents BETWEEN 100 AND 100000000),
+      bonus_cents INTEGER NOT NULL DEFAULT 0,
+      method TEXT NOT NULL,
+      method_label TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','APPROVED','REJECTED')),
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      reviewed_at TEXT, reviewed_by TEXT
+    )""")
+
     conn.execute("CREATE TABLE IF NOT EXISTS geo_demo_methods (country TEXT NOT NULL, method TEXT NOT NULL, label TEXT NOT NULL, details TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(country,method))")
     conn.execute("CREATE TABLE IF NOT EXISTS admin_audit (id INTEGER PRIMARY KEY AUTOINCREMENT, admin_id TEXT NOT NULL, user_id INTEGER, action TEXT NOT NULL, details TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)")
     conn.commit(); conn.close()
@@ -712,9 +724,31 @@ def admin_profile(actor, uid):
     if not r: return telegram_send(actor,'Пользователь не найден.',admin_menu())
     telegram_send(actor,f"👤 {r['public_id']}\n{r['first_name']} {r['last_name']}\nГЕО: {r['country']}\nБаланс: {r['demo_balance']:.2f} DEMO USDT\nРегистрация: {r['created_at']}\n\nБаланс виртуальный, не подлежит выводу.",[[{'text':'✏️ Установить DEMO-баланс','callback_data':f"balance:{uid}"}],[{'text':'👥 К пользователям','callback_data':'menu:users'}]])
 
+def topup_notice(request_id, user, country, amount, bonus, label):
+    for admin_id in TG_ADMIN_IDS:
+        telegram_send(admin_id, f'🧪 Заявка на DEMO-пополнение #{request_id}\nПользователь: {user}\nСтрана: {country}\nМетод: {label}\nСумма: {amount:.2f} DEMO USDT\nБонус: {bonus:.2f} DEMO USDT\nК зачислению: {amount+bonus:.2f} DEMO USDT\nНикаких реальных переводов.', [[{'text':'✅ Зачислить DEMO','callback_data':f'topup:a:{request_id}'},{'text':'❌ Отклонить','callback_data':f'topup:r:{request_id}'}]])
+
+def review_topup_request(request_id, approve, admin_id):
+    conn=db()
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        r=conn.execute('SELECT t.*,u.public_id FROM demo_topup_requests t JOIN users u ON u.id=t.user_id WHERE t.id=?',(request_id,)).fetchone()
+        if not r: return 'Заявка не найдена.'
+        if r['status']!='PENDING': return 'Заявка уже обработана: '+r['status']
+        if approve:
+            conn.execute('UPDATE users SET demo_balance=demo_balance+? WHERE id=?',((r['amount_cents']+r['bonus_cents'])/100,r['user_id']))
+        conn.execute('UPDATE demo_topup_requests SET status=?,reviewed_at=CURRENT_TIMESTAMP,reviewed_by=? WHERE id=?',('APPROVED' if approve else 'REJECTED',str(admin_id),request_id))
+        admin_audit(conn,admin_id,'demo_topup_approve' if approve else 'demo_topup_reject',r['user_id'],f"#{request_id}; amount={r['amount_cents']}; bonus={r['bonus_cents']}")
+        conn.commit()
+        return f"#{request_id} · {r['public_id']} · "+(f"Зачислено {(r['amount_cents']+r['bonus_cents'])/100:.2f} DEMO USDT" if approve else 'Отклонена')
+    finally: conn.close()
+
 def admin_pending(actor):
     conn=db();rows=conn.execute("SELECT d.id,d.amount_cents,u.public_id,u.country FROM demo_deposit_requests d JOIN users u ON u.id=d.user_id WHERE d.status='PENDING' ORDER BY d.id DESC LIMIT 20").fetchall();conn.close()
     telegram_send(actor,f'📥 Ожидают DEMO-заявки: {len(rows)}',admin_menu())
+    conn=db(); topups=conn.execute("SELECT t.*,u.public_id,u.country FROM demo_topup_requests t JOIN users u ON u.id=t.user_id WHERE t.status='PENDING' ORDER BY t.id DESC LIMIT 20").fetchall();conn.close()
+    for t in topups:
+        telegram_send(actor,f"🧪 Пополнение #{t['id']} · {t['public_id']} · {t['country']}\n{t['method_label']} · {t['amount_cents']/100:.2f} DEMO + {t['bonus_cents']/100:.2f} бонус",[[{'text':'✅ Зачислить DEMO','callback_data':f"topup:a:{t['id']}"},{'text':'❌ Отклонить','callback_data':f"topup:r:{t['id']}"}]])
     for r in rows:
         telegram_send(actor,f"#{r['id']} · {r['public_id']} · {r['country']} · {r['amount_cents']/100:.2f} DEMO USDT\nНикакой реальной оплаты не требуется.",[[{'text':'✅ Одобрить DEMO','callback_data':f"dep:a:{r['id']}"},{'text':'❌ Отклонить','callback_data':f"dep:r:{r['id']}"}]])
 
@@ -790,11 +824,45 @@ def review_demo_request(request_id, approve, admin_id):
         return f"#{request_id} · {row['public_id']} · "+('50 DEMO USDT активированы' if approve else 'отклонена')
     finally: conn.close()
 
+@app.get('/api/demo-topups')
+def demo_topups():
+    user=current_user()
+    if not user: return jsonify({'error':'Login required'}),401
+    conn=db(); rows=conn.execute('SELECT id,amount_cents,bonus_cents,method_label,status,created_at FROM demo_topup_requests WHERE user_id=? ORDER BY id DESC LIMIT 10',(user['id'],)).fetchall();conn.close()
+    return jsonify({'requests':[dict(r) for r in rows], 'demo_only':True})
+
+@app.post('/api/demo-topups')
+def create_demo_topup():
+    if not TG_TOKEN or not TG_ADMIN_IDS: return jsonify({'error':'DEMO administrator unavailable'}),503
+    user=current_user()
+    if not user: return jsonify({'error':'Login required'}),401
+    data=request.get_json(silent=True) or {}
+    try:
+        amount=float(data.get('amount'))
+        if not math.isfinite(amount) or not 1<=amount<=1000000: raise ValueError()
+        cents=round(amount*100)
+        if abs(amount*100-cents)>0.001: raise ValueError()
+    except (ValueError,TypeError): return jsonify({'error':'Amount must be 1–1,000,000 with max 2 decimals'}),400
+    method=str(data.get('method','')).lower()
+    conn=db()
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        row=conn.execute('SELECT label FROM geo_demo_methods WHERE country IN (?,?) AND method=? AND enabled=1 ORDER BY CASE WHEN country=? THEN 0 ELSE 1 END LIMIT 1',(user['country'],'ALL',method,user['country'])).fetchone()
+        if not row: return jsonify({'error':'This DEMO method is not available for your region'}),400
+        pending=conn.execute("SELECT 1 FROM demo_topup_requests WHERE user_id=? AND status='PENDING'",(user['id'],)).fetchone()
+        if pending: return jsonify({'error':'You already have a pending DEMO top-up'}),409
+        bonus=round(cents*0.10) if method=='crypto' else 0
+        cur=conn.execute('INSERT INTO demo_topup_requests(user_id,amount_cents,bonus_cents,method,method_label) VALUES(?,?,?,?,?)',(user['id'],cents,bonus,method,row['label']))
+        rid=cur.lastrowid;conn.commit()
+    finally: conn.close()
+    topup_notice(rid,user['public_id'],user['country'],cents/100,bonus/100,row['label'])
+    return jsonify({'ok':True,'request_id':rid,'amount':cents/100,'bonus':bonus/100,'pending':True,'demo_only':True}),202
+
 @app.get('/api/demo-payment-methods')
 def demo_payment_methods():
     user=current_user()
     if not user: return jsonify({'error':'Login required'}),401
-    conn=db();rows=conn.execute('SELECT method,label,details FROM geo_demo_methods WHERE country IN (?,?) AND enabled=1 ORDER BY CASE WHEN country=? THEN 0 ELSE 1 END,method',(user['country'],'ALL',user['country'])).fetchall();conn.close()
+    conn=db();rows=conn.execute('SELECT method,label,details FROM geo_demo_methods WHERE country IN (?,?) AND enabled=1 ORDER BY CASE WHEN country=? THEN 0 ELSE 1 END,CASE WHEN method="crypto" THEN 0 ELSE 1 END,method',(user['country'],'ALL',user['country'])).fetchall();conn.close()
     return jsonify({'country':user['country'],'methods':[dict(r) for r in rows],'demo_only':True,'real_payments_enabled':False})
 
 @app.post('/telegram/webhook')
@@ -807,8 +875,12 @@ def telegram_webhook():
     if callback:
         payload=callback.get('data','')
         telegram_answer_callback(callback.get('id',''),'Принято')
+        topup_match=re.fullmatch(r'topup:([ar]):([0-9]{1,12})',payload)
         match=re.fullmatch(r'dep:([ar]):([0-9]{1,12})',payload)
-        if match:
+        if topup_match:
+            result=review_topup_request(int(topup_match.group(2)),topup_match.group(1)=='a',actor)
+            telegram_send(actor,result,admin_menu())
+        elif match:
             result=review_demo_request(int(match.group(2)),match.group(1)=='a',actor)
             telegram_send(actor,result,admin_menu())
         elif payload=='menu:home': telegram_send(actor,'🏠 Orbitra DEMO · панель администратора',admin_menu())
