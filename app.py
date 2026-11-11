@@ -758,7 +758,8 @@ def telegram_send(chat_id, text, keyboard=None):
 
 def admin_menu():
     return [[{'text':'👥 Пользователи','callback_data':'menu:users'},{'text':'💰 Балансы','callback_data':'menu:balances'}],
-            [{'text':'📥 Заявки','callback_data':'menu:pending'},{'text':'🌍 ГЕО и реквизиты','callback_data':'menu:geo'}],
+            [{'text':'📥 Заявки','callback_data':'menu:pending'},{'text':'🏦 Банки по ГЕО','callback_data':'menu:geo'}],
+            [{'text':'🪙 Криптовалюты · все страны','callback_data':'menu:crypto'}],
             [{'text':'📊 Статистика','callback_data':'menu:stats'},{'text':'🏠 Главное меню','callback_data':'menu:home'}]]
 
 def admin_audit(conn, actor, action, user_id=None, details=''):
@@ -815,8 +816,21 @@ def admin_stats(actor):
 
 def admin_geo(actor):
     conn=db(); rows=conn.execute('SELECT country,method,label FROM geo_demo_methods ORDER BY country,method LIMIT 30').fetchall();conn.close()
-    lines=['🌍 ГЕО · ДЕМО-инструкции','Для настройки отправьте сообщение:','/geo Страна | crypto:USDT:TRC20 или bank | Название | Описание','Пример:','/geo Albania | crypto:USDT:TRC20 | USDT TRC20 | Тестовый адрес: SAMPLE-ONLY','Для удаления: /geodel Albania | crypto','ВАЖНО: реальные платежи не принимаются.','']
+    lines=['🌍 ГЕО · ДЕМО-инструкции','Настройки банков по странам:','/geo Страна | bank | Название банка | Тестовые реквизиты','Пример:','/geo Albania | bank | Example Bank | Тестовый IBAN: SAMPLE-ONLY','Для удаления: /geodel Albania | bank','ВАЖНО: реальные платежи не принимаются.','']
     lines += [f"{r['country']} · {r['method']} · {r['label']}" for r in rows]
+    telegram_send(actor,'\n'.join(lines),admin_menu())
+
+def admin_crypto(actor):
+    conn=db()
+    rows=conn.execute("SELECT method,label,details FROM geo_demo_methods WHERE country='ALL' AND method LIKE 'crypto:%' ORDER BY method").fetchall()
+    conn.close()
+    lines=['🪙 КРИПТОВАЛЮТЫ · ВСЕ СТРАНЫ (DEMO)',
+           'Добавить/изменить тестовый адрес:',
+           '/crypto USDT TRC20 | USDT · TRC20 | Тестовый адрес: SAMPLE-USDT',
+           '/crypto BTC BITCOIN | Bitcoin | Тестовый адрес: SAMPLE-BTC',
+           'Удалить: /cryptodel USDT TRC20',
+           'Настройки общие для всех ГЕО. Только учебные адреса, не отправляйте реальные средства.', '']
+    lines += [f"{r['method']} · {r['label']} · {r['details']}" for r in rows]
     telegram_send(actor,'\n'.join(lines),admin_menu())
 
 def deposit_notice(request_id, user, country):
@@ -940,13 +954,16 @@ def demo_payment_methods():
         if key not in unique: unique[key]=dict(r)
     methods=[]
     for key,r in unique.items():
+        if key.startswith('crypto') and r['country']!='ALL': continue
         if key=='bank': methods.append({'method':'bank','key':'bank','label':r['label'],'details':r['details'],'configured':True})
         elif key=='crypto' or key.startswith('crypto:'):
             parts=key.split(':')
             currency=(parts[1] if len(parts)>1 else (re.search(r'USDT|USDC|BTC|ETH|TON|TRX|BNB|SOL',r['label'],re.I) or ['USDT'])[0]).upper()
             network=(parts[2] if len(parts)>2 else (re.search(r'TRC20|ERC20|BEP20|TON|SOLANA|POLYGON|BASE',r['label'],re.I) or ['TRC20'])[0]).upper()
             methods.append({'method':'crypto','key':key,'currency':currency,'network':network,'label':r['label'],'details':r['details'],'configured':True})
-    if not any(m['method']=='crypto' for m in methods): methods.append({'method':'crypto','key':'crypto:USDT:TRC20','currency':'USDT','network':'TRC20','label':'USDT · TRC20 (DEMO)','details':'Тестовый адрес: DEMO-ONLY-NOT-A-WALLET','configured':False})
+    if not any(m['method']=='crypto' for m in methods):
+        for cur,network in [('USDT','TRC20'),('BTC','BITCOIN'),('ETH','ERC20'),('USDC','ERC20'),('SOL','SOLANA')]:
+            methods.append({'method':'crypto','key':f'crypto:{cur}:{network}','currency':cur,'network':network,'label':f'{cur} · {network} (DEMO)','details':'Тестовый адрес: DEMO-ONLY-NOT-A-WALLET','configured':False})
     if not any(m['method']=='bank' for m in methods): methods.append({'method':'bank','key':'bank','label':'Банковский перевод','details':'','configured':False})
     methods.sort(key=lambda m:(m['method']!='crypto',m.get('currency',''),m.get('network','')))
     return jsonify({'country':user['country'],'methods':methods,'bank_request':dict(bank_request) if bank_request else None,'demo_only':True,'real_payments_enabled':False})
@@ -1004,6 +1021,7 @@ def telegram_webhook():
         elif payload=='menu:pending': admin_pending(actor)
         elif payload=='menu:stats': admin_stats(actor)
         elif payload=='menu:geo': admin_geo(actor)
+        elif payload=='menu:crypto': admin_crypto(actor)
         elif re.fullmatch(r'user:[0-9]+',payload): admin_profile(actor,int(payload.split(':')[1]))
         elif re.fullmatch(r'balance:[0-9]+',payload):
             uid=int(payload.split(':')[1]);telegram_send(actor,f'✏️ Установить баланс пользователю #{uid}\nОтправьте сообщение:\n/setbalance {uid} 250.00\nСумма заменит текущий DEMO-баланс; операция записывается в журнал.')
@@ -1013,9 +1031,24 @@ def telegram_webhook():
         elif cmd in ('/users','/balances'): admin_users(actor)
         elif cmd=='/pending': admin_pending(actor)
         elif cmd=='/stats': admin_stats(actor)
+        elif cmd=='/crypto':
+            m=re.fullmatch(r'/crypto\s+([A-Za-z0-9]{2,12})\s+([A-Za-z0-9]{2,20})\s*\|\s*([^|]{1,80})\s*\|\s*(.{1,400})',text,re.S)
+            if not m: admin_crypto(actor)
+            elif not any(t in m.group(4).lower() for t in ('тест','demo','sample')):
+                telegram_send(actor,'Только учебные адреса: добавьте «Тестовый», DEMO или SAMPLE.',admin_menu())
+            else:
+                key=f'crypto:{m.group(1).upper()}:{m.group(2).upper()}'
+                conn=db();conn.execute('INSERT INTO geo_demo_methods(country,method,label,details) VALUES(?,?,?,?) ON CONFLICT(country,method) DO UPDATE SET label=excluded.label,details=excluded.details,enabled=1',('ALL',key,m.group(3).strip(),m.group(4).strip()));admin_audit(conn,actor,'global_crypto_set',None,key);conn.commit();conn.close()
+                telegram_send(actor,'🪙 DEMO-криптовалюта сохранена для всех стран: '+key,admin_menu())
+        elif cmd=='/cryptodel':
+            m=re.fullmatch(r'/cryptodel\s+([A-Za-z0-9]{2,12})\s+([A-Za-z0-9]{2,20})',text)
+            if not m: admin_crypto(actor)
+            else:
+                key=f'crypto:{m.group(1).upper()}:{m.group(2).upper()}'
+                conn=db();conn.execute('DELETE FROM geo_demo_methods WHERE country=? AND method=?',('ALL',key));admin_audit(conn,actor,'global_crypto_delete',None,key);conn.commit();conn.close();telegram_send(actor,'Удалено: '+key,admin_menu())
         elif cmd=='/geo':
             parts=[p.strip() for p in text[5:].split('|')]
-            if len(parts)==4 and parts[0] in COUNTRIES_ES+['ALL'] and (parts[1] in ('crypto','bank') or re.fullmatch(r'crypto:[A-Za-z0-9]{2,12}:[A-Za-z0-9]{2,20}',parts[1])) and 1<=len(parts[2])<=80 and 1<=len(parts[3])<=400:
+            if len(parts)==4 and parts[0] in COUNTRIES_ES+['ALL'] and parts[1]=='bank' and 1<=len(parts[2])<=80 and 1<=len(parts[3])<=400:
                 # Never store or display live payment instructions in the demo platform.
                 if not ('тест' in parts[3].lower() or 'demo' in parts[3].lower() or 'sample' in parts[3].lower()):
                     telegram_send(actor,'Укажите в описании «Тестовый» / DEMO / SAMPLE. Настоящие реквизиты для оплаты в демо-версии не публикуются.',admin_menu())
@@ -1027,7 +1060,7 @@ def telegram_webhook():
             else: admin_geo(actor)
         elif cmd=='/geodel':
             parts=[p.strip() for p in text[8:].split('|')]
-            if len(parts)==2 and (parts[1] in ('crypto','bank') or parts[1].startswith('crypto:')):
+            if len(parts)==2 and parts[1]=='bank':
                 conn=db();conn.execute('DELETE FROM geo_demo_methods WHERE country=? AND method=?',tuple(parts));admin_audit(conn,actor,'geo_delete',None,' / '.join(parts));conn.commit();conn.close();telegram_send(actor,'Настройка удалена.',admin_menu())
             else: admin_geo(actor)
         elif cmd=='/setbalance':
