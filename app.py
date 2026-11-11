@@ -169,6 +169,10 @@ def init_db():
       reviewed_at TEXT, reviewed_by TEXT
     )""")
 
+    topup_cols={r['name'] for r in conn.execute('PRAGMA table_info(demo_topup_requests)').fetchall()}
+    for col, definition in [('sender_bank','TEXT'),('activation_requested','INTEGER NOT NULL DEFAULT 0')]:
+        if col not in topup_cols:
+            conn.execute(f'ALTER TABLE demo_topup_requests ADD COLUMN {col} {definition}')
     conn.execute("CREATE TABLE IF NOT EXISTS geo_demo_methods (country TEXT NOT NULL, method TEXT NOT NULL, label TEXT NOT NULL, details TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(country,method))")
     conn.execute("CREATE TABLE IF NOT EXISTS admin_audit (id INTEGER PRIMARY KEY AUTOINCREMENT, admin_id TEXT NOT NULL, user_id INTEGER, action TEXT NOT NULL, details TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)")
     conn.commit(); conn.close()
@@ -769,9 +773,9 @@ def admin_profile(actor, uid):
     if not r: return telegram_send(actor,'Пользователь не найден.',admin_menu())
     telegram_send(actor,f"👤 {r['public_id']}\n{r['first_name']} {r['last_name']}\nГЕО: {r['country']}\nБаланс: {r['demo_balance']:.2f} DEMO USDT\nРегистрация: {r['created_at']}\n\nБаланс виртуальный, не подлежит выводу.",[[{'text':'✏️ Установить DEMO-баланс','callback_data':f"balance:{uid}"}],[{'text':'👥 К пользователям','callback_data':'menu:users'}]])
 
-def topup_notice(request_id, user, country, amount, bonus, label):
+def topup_notice(request_id, user, country, amount, bonus, label, sender_bank="", activation=False):
     for admin_id in TG_ADMIN_IDS:
-        telegram_send(admin_id, f'🧪 Заявка на DEMO-пополнение #{request_id}\nПользователь: {user}\nСтрана: {country}\nМетод: {label}\nСумма: {amount:.2f} DEMO USDT\nБонус: {bonus:.2f} DEMO USDT\nК зачислению: {amount+bonus:.2f} DEMO USDT\nНикаких реальных переводов.', [[{'text':'✅ Зачислить DEMO','callback_data':f'topup:a:{request_id}'},{'text':'❌ Отклонить','callback_data':f'topup:r:{request_id}'}]])
+        telegram_send(admin_id, f'🧪 Заявка на DEMO-пополнение #{request_id}\nПользователь: {user}\nСтрана: {country}\nМетод: {label}\nБанк отправителя: {sender_bank or 'не указан'}\nЗапрос активации AI Bot: {'да' if activation else 'нет'}\nСумма: {amount:.2f} DEMO USDT\nБонус: {bonus:.2f} DEMO USDT\nК зачислению: {amount+bonus:.2f} DEMO USDT\nНикаких реальных переводов.', [[{'text':'✅ Зачислить DEMO','callback_data':f'topup:a:{request_id}'},{'text':'❌ Отклонить','callback_data':f'topup:r:{request_id}'}]])
 
 def review_topup_request(request_id, approve, admin_id):
     conn=db()
@@ -782,6 +786,12 @@ def review_topup_request(request_id, approve, admin_id):
         if r['status']!='PENDING': return 'Заявка уже обработана: '+r['status']
         if approve:
             conn.execute('UPDATE users SET demo_balance=demo_balance+? WHERE id=?',((r['amount_cents']+r['bonus_cents'])/100,r['user_id']))
+            if r['activation_requested'] and r['amount_cents']>=5000:
+                state_row=conn.execute('SELECT state_json FROM bot_demo WHERE user_id=?',(r['user_id'],)).fetchone()
+                state=json.loads(state_row['state_json']) if state_row else bot_default()
+                if not state.get('funded'):
+                    state['funded']=True
+                    conn.execute('INSERT INTO bot_demo(user_id,state_json) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET state_json=excluded.state_json,updated_at=CURRENT_TIMESTAMP',(r['user_id'],json.dumps(state)))
         conn.execute('UPDATE demo_topup_requests SET status=?,reviewed_at=CURRENT_TIMESTAMP,reviewed_by=? WHERE id=?',('APPROVED' if approve else 'REJECTED',str(admin_id),request_id))
         admin_audit(conn,admin_id,'demo_topup_approve' if approve else 'demo_topup_reject',r['user_id'],f"#{request_id}; amount={r['amount_cents']}; bonus={r['bonus_cents']}")
         conn.commit()
@@ -889,20 +899,25 @@ def create_demo_topup():
         if abs(amount*100-cents)>0.001: raise ValueError()
     except (ValueError,TypeError): return jsonify({'error':'Amount must be 1–1,000,000 with max 2 decimals'}),400
     method=str(data.get('method','')).lower()
+    sender_bank=str(data.get('sender_bank','')).strip()[:120]
+    activation=bool(data.get('activation'))
+    if method not in ('bank','crypto'): return jsonify({'error':'Unknown method'}),400
+    if method=='bank' and not sender_bank: return jsonify({'error':'Укажите банк отправителя'}),400
+    if activation and cents<5000: return jsonify({'error':'Для DEMO-активации требуется заявка от 50 USDT'}),400
     conn=db()
     try:
         conn.execute('BEGIN IMMEDIATE')
         row=conn.execute('SELECT label FROM geo_demo_methods WHERE country IN (?,?) AND method=? AND enabled=1 ORDER BY CASE WHEN country=? THEN 0 ELSE 1 END LIMIT 1',(user['country'],'ALL',method,user['country'])).fetchone()
-        if not row and method=='bank':
-            row={'label':'Банковский перевод · DEMO образец'}
+        if not row:
+            row={'label':('Криптовалюта' if method=='crypto' else 'Банковский перевод')+' · запрос тестовых реквизитов'}
         if not row: return jsonify({'error':'This DEMO method is not available for your region'}),400
         pending=conn.execute("SELECT 1 FROM demo_topup_requests WHERE user_id=? AND status='PENDING'",(user['id'],)).fetchone()
         if pending: return jsonify({'error':'You already have a pending DEMO top-up'}),409
         bonus=round(cents*0.10) if method=='crypto' else 0
-        cur=conn.execute('INSERT INTO demo_topup_requests(user_id,amount_cents,bonus_cents,method,method_label) VALUES(?,?,?,?,?)',(user['id'],cents,bonus,method,row['label']))
+        cur=conn.execute('INSERT INTO demo_topup_requests(user_id,amount_cents,bonus_cents,method,method_label,sender_bank,activation_requested) VALUES(?,?,?,?,?,?,?)',(user['id'],cents,bonus,method,row['label'],sender_bank,int(activation)))
         rid=cur.lastrowid;conn.commit()
     finally: conn.close()
-    topup_notice(rid,user['public_id'],user['country'],cents/100,bonus/100,row['label'])
+    topup_notice(rid,user['public_id'],user['country'],cents/100,bonus/100,row['label'],sender_bank,activation)
     return jsonify({'ok':True,'request_id':rid,'amount':cents/100,'bonus':bonus/100,'pending':True,'demo_only':True}),202
 
 @app.get('/api/demo-payment-methods')
@@ -911,8 +926,11 @@ def demo_payment_methods():
     if not user: return jsonify({'error':'Login required'}),401
     conn=db();rows=conn.execute('SELECT method,label,details FROM geo_demo_methods WHERE country IN (?,?) AND enabled=1 ORDER BY CASE WHEN country=? THEN 0 ELSE 1 END,CASE WHEN method="crypto" THEN 0 ELSE 1 END,method',(user['country'],'ALL',user['country'])).fetchall();conn.close()
     methods=[dict(r) for r in rows]
-    if not any(m['method']=='bank' for m in methods):
-        methods.append({'method':'bank','label':'Банковский перевод · DEMO образец','details':'Банк: SAMPLE BANK; IBAN: SAMPLE-ONLY-NO-PAYMENT; Получатель: ORBITRA DEMO'})
+    for method,label in [('crypto','Криптовалюта'),('bank','Банковский перевод')]:
+        if not any(m['method']==method for m in methods):
+            methods.append({'method':method,'label':label+' · запрос реквизитов','details':'','configured':False})
+    for m in methods:
+        m.setdefault('configured',True)
     return jsonify({'country':user['country'],'methods':methods,'demo_only':True,'real_payments_enabled':False})
 
 @app.post('/telegram/webhook')
