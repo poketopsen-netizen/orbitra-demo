@@ -7,6 +7,8 @@ import urllib.parse
 import os
 import math
 import ipaddress
+import re
+import hmac
 from pathlib import Path
 from datetime import datetime, timezone, timedelta, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -145,6 +147,15 @@ def init_db():
     conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_public_id ON users(public_id)')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_trades_user_status ON demo_trades(user_id, status)')
     conn.execute('''CREATE TABLE IF NOT EXISTS bot_demo (user_id INTEGER PRIMARY KEY, state_json TEXT NOT NULL, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(user_id) REFERENCES users(id))''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS demo_deposit_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id),
+        amount_cents INTEGER NOT NULL CHECK(amount_cents = 5000),
+        status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','APPROVED','REJECTED')),
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        reviewed_at TEXT, reviewed_by TEXT
+    )''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_deposit_user ON demo_deposit_requests(user_id, status)')
     conn.commit(); conn.close()
 
 
@@ -661,16 +672,124 @@ def bot_reset():
     state=bot_default(); bot_save(state,user)
     return jsonify(bot_public(state))
 
+# Telegram administrator (DEMO ONLY). No payment receipts, real funds, or crypto custody.
+TG_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '').strip()
+TG_ADMIN_IDS = {int(v) for v in os.environ.get('TELEGRAM_ADMIN_IDS','').split(',') if v.strip().isdigit()}
+TG_WEBHOOK_SECRET = os.environ.get('TELEGRAM_WEBHOOK_SECRET','').strip()
+
+def telegram_send(chat_id, text, keyboard=None):
+    if not TG_TOKEN: return False
+    payload={'chat_id':chat_id,'text':text[:3900]}
+    if keyboard: payload['reply_markup']={'inline_keyboard':keyboard}
+    try:
+        req=urllib.request.Request('https://api.telegram.org/bot'+TG_TOKEN+'/sendMessage',
+            data=json.dumps(payload).encode(),headers={'Content-Type':'application/json'},method='POST')
+        with urllib.request.urlopen(req,timeout=6) as resp: return bool(json.load(resp).get('ok'))
+    except Exception as exc:
+        app.logger.warning('Telegram notification failed: %s',type(exc).__name__)
+        return False
+
+def deposit_notice(request_id, user, country):
+    for admin_id in TG_ADMIN_IDS:
+        telegram_send(admin_id,
+            f'🧪 Orbitra DEMO · заявка #{request_id}\nПользователь: {user}\nСтрана: {country}\nСумма: 50 виртуальных USDT\nРеальная оплата НЕ требуется.',
+            [[{'text':'✅ Одобрить DEMO','callback_data':f'dep:a:{request_id}'},
+              {'text':'❌ Отклонить','callback_data':f'dep:r:{request_id}'}]])
+
+@app.get('/api/demo-deposits')
+def deposit_status():
+    user=current_user()
+    if not user: return jsonify({'error':'Login required'}),401
+    conn=db(); rows=conn.execute('SELECT id,amount_cents,status,created_at,reviewed_at FROM demo_deposit_requests WHERE user_id=? ORDER BY id DESC LIMIT 10',(user['id'],)).fetchall();conn.close()
+    return jsonify({'requests':[dict(row) for row in rows], 'currency':'DEMO_USDT','real_funds':False})
+
 @app.post('/api/bot-demo/fund')
 def bot_fund():
-    """Explicitly grant 50 TEST USDT, never request or accept payment details."""
-    state,user=bot_current()
+    if not TG_TOKEN or not TG_ADMIN_IDS or not TG_WEBHOOK_SECRET:
+        return jsonify({'error':'Telegram admin is not configured yet.'}),503
+    user=current_user()
     if not user: return jsonify({'error':'Register or log in first.'}),401
-    if state.get('funded') or state.get('active') or state.get('step'):
-        return jsonify({'error':'Demo already activated.'}),409
-    state['funded']=True
-    bot_save(state,user)
-    return jsonify({**bot_public(state),'authenticated':True})
+    conn=db()
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        row=conn.execute('SELECT state_json FROM bot_demo WHERE user_id=?',(user['id'],)).fetchone()
+        state=json.loads(row['state_json']) if row else bot_default()
+        if state.get('funded') or state.get('active') or state.get('step'):
+            return jsonify({'error':'DEMO bot already activated.'}),409
+        pending=conn.execute("SELECT id FROM demo_deposit_requests WHERE user_id=? AND status='PENDING' ORDER BY id DESC LIMIT 1",(user['id'],)).fetchone()
+        if pending: return jsonify({'error':'DEMO request already pending admin approval.','pending':True}),409
+        cur=conn.execute('INSERT INTO demo_deposit_requests(user_id,amount_cents) VALUES(?,5000)',(user['id'],))
+        request_id=cur.lastrowid
+        conn.commit()
+    finally: conn.close()
+    deposit_notice(request_id,user['public_id'],user['country'])
+    return jsonify({'pending':True,'request_id':request_id,'message':'DEMO activation request sent to administrator. No payment needed.'}),202
+
+def telegram_answer_callback(callback_id, text):
+    if not TG_TOKEN: return
+    try:
+        data=json.dumps({'callback_query_id':callback_id,'text':text[:180]}).encode()
+        urllib.request.urlopen(urllib.request.Request('https://api.telegram.org/bot'+TG_TOKEN+'/answerCallbackQuery',data=data,headers={'Content-Type':'application/json'}),timeout=5).close()
+    except Exception: pass
+
+def review_demo_request(request_id, approve, admin_id):
+    conn=db()
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        row=conn.execute('SELECT d.*,u.public_id FROM demo_deposit_requests d JOIN users u ON u.id=d.user_id WHERE d.id=?',(request_id,)).fetchone()
+        if not row: return 'Заявка не найдена.'
+        if row['status']!='PENDING': return 'Уже обработана: '+row['status']
+        if approve:
+            state_row=conn.execute('SELECT state_json FROM bot_demo WHERE user_id=?',(row['user_id'],)).fetchone()
+            state=json.loads(state_row['state_json']) if state_row else bot_default()
+            if state.get('funded') or state.get('active') or state.get('step'):
+                return 'Бот уже активирован; повторное зачисление запрещено.'
+            state['funded']=True
+            conn.execute('INSERT INTO bot_demo(user_id,state_json) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET state_json=excluded.state_json,updated_at=CURRENT_TIMESTAMP',(row['user_id'],json.dumps(state)))
+        conn.execute("UPDATE demo_deposit_requests SET status=?,reviewed_at=CURRENT_TIMESTAMP,reviewed_by=? WHERE id=? AND status='PENDING'",('APPROVED' if approve else 'REJECTED',str(admin_id),request_id))
+        conn.commit()
+        return f"#{request_id} · {row['public_id']} · "+('50 DEMO USDT активированы' if approve else 'отклонена')
+    finally: conn.close()
+
+@app.post('/telegram/webhook')
+def telegram_webhook():
+    if not TG_TOKEN or not TG_WEBHOOK_SECRET or not TG_ADMIN_IDS:
+        return jsonify({'error':'Telegram not configured'}),503
+    provided=request.headers.get('X-Telegram-Bot-Api-Secret-Token','')
+    if not hmac.compare_digest(provided,TG_WEBHOOK_SECRET): return jsonify({'error':'Forbidden'}),403
+    data=request.get_json(silent=True) or {}
+    msg=data.get('message') or {}; callback=data.get('callback_query') or {}
+    actor=(callback.get('from') or msg.get('from') or {}).get('id')
+    if actor not in TG_ADMIN_IDS: return jsonify({'ok':True})
+    if callback:
+        payload=callback.get('data',''); match=re.fullmatch(r'dep:([ar]):([0-9]{1,12})',payload)
+        if match:
+            result=review_demo_request(int(match.group(2)),match.group(1)=='a',actor)
+            telegram_answer_callback(callback.get('id',''),result)
+            telegram_send(actor,result)
+    else:
+        cmd=(msg.get('text') or '').split(' ')[0].split('@')[0]
+        conn=db()
+        try:
+            if cmd in ('/start','/help'):
+                response='Orbitra DEMO Admin\n/users — последние пользователи\n/pending — заявки на активацию\n/stats — статистика\nВсе суммы виртуальные, реальных платежей нет.'
+            elif cmd=='/stats':
+                users=conn.execute('SELECT COUNT(*) FROM users').fetchone()[0]
+                pending=conn.execute("SELECT COUNT(*) FROM demo_deposit_requests WHERE status='PENDING'").fetchone()[0]
+                approved=conn.execute("SELECT COUNT(*) FROM demo_deposit_requests WHERE status='APPROVED'").fetchone()[0]
+                response=f'Пользователей: {users}\nОжидают: {pending}\nDEMO-активаций: {approved}'
+            elif cmd=='/users':
+                rows=conn.execute('SELECT public_id,first_name,country,created_at FROM users ORDER BY id DESC LIMIT 15').fetchall()
+                response='Последние регистрации:\n'+'\n'.join(f"{r['public_id']} · {r['first_name']} · {r['country']} · {r['created_at']}" for r in rows)
+            elif cmd=='/pending':
+                rows=conn.execute("SELECT d.id,u.public_id,u.country FROM demo_deposit_requests d JOIN users u ON u.id=d.user_id WHERE d.status='PENDING' ORDER BY d.id DESC LIMIT 15").fetchall()
+                response='Ожидают DEMO-активации: '+str(len(rows))
+                for r in rows:
+                    telegram_send(actor,f"#{r['id']} · {r['public_id']} · {r['country']} · 50 DEMO USDT",[[{'text':'✅ Одобрить','callback_data':f"dep:a:{r['id']}"},{'text':'❌ Отклонить','callback_data':f"dep:r:{r['id']}"}]])
+            else: response='Команды: /users /pending /stats'
+        finally: conn.close()
+        telegram_send(actor,response)
+    return jsonify({'ok':True})
 
 @app.get('/api/bot-demo/fx')
 def bot_fx():
