@@ -174,6 +174,8 @@ def init_db():
         if col not in topup_cols:
             conn.execute(f'ALTER TABLE demo_topup_requests ADD COLUMN {col} {definition}')
     conn.execute("CREATE TABLE IF NOT EXISTS geo_demo_methods (country TEXT NOT NULL, method TEXT NOT NULL, label TEXT NOT NULL, details TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(country,method))")
+    conn.execute("""CREATE TABLE IF NOT EXISTS demo_bank_requests (id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL REFERENCES users(id),sender_bank TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'PENDING',created_at TEXT DEFAULT CURRENT_TIMESTAMP,notified_at TEXT)""")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_demo_bank_requests_user ON demo_bank_requests(user_id,status)")
     conn.execute("CREATE TABLE IF NOT EXISTS admin_audit (id INTEGER PRIMARY KEY AUTOINCREMENT, admin_id TEXT NOT NULL, user_id INTEGER, action TEXT NOT NULL, details TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)")
     conn.commit(); conn.close()
 
@@ -813,7 +815,7 @@ def admin_stats(actor):
 
 def admin_geo(actor):
     conn=db(); rows=conn.execute('SELECT country,method,label FROM geo_demo_methods ORDER BY country,method LIMIT 30').fetchall();conn.close()
-    lines=['🌍 ГЕО · ДЕМО-инструкции','Для настройки отправьте сообщение:','/geo Страна | crypto или bank | Название | Описание','Пример:','/geo Albania | crypto | USDT TRC20 | Тестовый адрес: SAMPLE-ONLY','Для удаления: /geodel Albania | crypto','ВАЖНО: реальные платежи не принимаются.','']
+    lines=['🌍 ГЕО · ДЕМО-инструкции','Для настройки отправьте сообщение:','/geo Страна | crypto:USDT:TRC20 или bank | Название | Описание','Пример:','/geo Albania | crypto:USDT:TRC20 | USDT TRC20 | Тестовый адрес: SAMPLE-ONLY','Для удаления: /geodel Albania | crypto','ВАЖНО: реальные платежи не принимаются.','']
     lines += [f"{r['country']} · {r['method']} · {r['label']}" for r in rows]
     telegram_send(actor,'\n'.join(lines),admin_menu())
 
@@ -899,6 +901,7 @@ def create_demo_topup():
         if abs(amount*100-cents)>0.001: raise ValueError()
     except (ValueError,TypeError): return jsonify({'error':'Amount must be 1–1,000,000 with max 2 decimals'}),400
     method=str(data.get('method','')).lower()
+    method_key=str(data.get('method_key',method)).strip()[:100]
     sender_bank=str(data.get('sender_bank','')).strip()[:120]
     activation=bool(data.get('activation'))
     if method not in ('bank','crypto'): return jsonify({'error':'Unknown method'}),400
@@ -907,10 +910,11 @@ def create_demo_topup():
     conn=db()
     try:
         conn.execute('BEGIN IMMEDIATE')
-        row=conn.execute('SELECT label FROM geo_demo_methods WHERE country IN (?,?) AND method=? AND enabled=1 ORDER BY CASE WHEN country=? THEN 0 ELSE 1 END LIMIT 1',(user['country'],'ALL',method,user['country'])).fetchone()
-        if not row:
-            row={'label':('Криптовалюта' if method=='crypto' else 'Банковский перевод')+' · запрос тестовых реквизитов'}
-        if not row: return jsonify({'error':'This DEMO method is not available for your region'}),400
+        if method=='crypto' and not (method_key=='crypto' or re.fullmatch(r'crypto:[A-Za-z0-9]{2,12}:[A-Za-z0-9]{2,20}',method_key)):
+            return jsonify({'error':'Invalid currency/network'}),400
+        if method=='bank': method_key='bank'
+        row=conn.execute('SELECT label FROM geo_demo_methods WHERE country IN (?,?) AND method=? AND enabled=1 ORDER BY CASE WHEN country=? THEN 0 ELSE 1 END LIMIT 1',(user['country'],'ALL',method_key,user['country'])).fetchone()
+        if not row: return jsonify({'error':'Для выбранной криптовалюты или банка тестовые реквизиты ещё не настроены'}),400
         pending=conn.execute("SELECT 1 FROM demo_topup_requests WHERE user_id=? AND status='PENDING'",(user['id'],)).fetchone()
         if pending: return jsonify({'error':'You already have a pending DEMO top-up'}),409
         bonus=round(cents*0.10) if method=='crypto' else 0
@@ -924,14 +928,56 @@ def create_demo_topup():
 def demo_payment_methods():
     user=current_user()
     if not user: return jsonify({'error':'Login required'}),401
-    conn=db();rows=conn.execute('SELECT method,label,details FROM geo_demo_methods WHERE country IN (?,?) AND enabled=1 ORDER BY CASE WHEN country=? THEN 0 ELSE 1 END,CASE WHEN method="crypto" THEN 0 ELSE 1 END,method',(user['country'],'ALL',user['country'])).fetchall();conn.close()
-    methods=[dict(r) for r in rows]
-    for method,label in [('crypto','Криптовалюта'),('bank','Банковский перевод')]:
-        if not any(m['method']==method for m in methods):
-            methods.append({'method':method,'label':label+' · запрос реквизитов','details':'','configured':False})
-    for m in methods:
-        m.setdefault('configured',True)
-    return jsonify({'country':user['country'],'methods':methods,'demo_only':True,'real_payments_enabled':False})
+    conn=db()
+    rows=conn.execute('SELECT country,method,label,details FROM geo_demo_methods WHERE country IN (?,?) AND enabled=1 ORDER BY CASE WHEN country=? THEN 0 ELSE 1 END',(user['country'],'ALL',user['country'])).fetchall()
+    bank_request=conn.execute("SELECT id,status,sender_bank FROM demo_bank_requests WHERE user_id=? ORDER BY id DESC LIMIT 1",(user['id'],)).fetchone()
+    conn.close()
+    # Country overrides ALL. Cryptocurrency is configured by currency+network (crypto:USDT:TRC20).
+    unique={}
+    for r in rows:
+        key=r['method']
+        if key not in unique: unique[key]=dict(r)
+    methods=[]
+    for key,r in unique.items():
+        if key=='bank': methods.append({'method':'bank','key':'bank','label':r['label'],'details':r['details'],'configured':True})
+        elif key=='crypto' or key.startswith('crypto:'):
+            parts=key.split(':')
+            currency=(parts[1] if len(parts)>1 else (re.search(r'USDT|USDC|BTC|ETH|TON|TRX|BNB|SOL',r['label'],re.I) or ['USDT'])[0]).upper()
+            network=(parts[2] if len(parts)>2 else (re.search(r'TRC20|ERC20|BEP20|TON|SOLANA|POLYGON|BASE',r['label'],re.I) or ['TRC20'])[0]).upper()
+            methods.append({'method':'crypto','key':key,'currency':currency,'network':network,'label':r['label'],'details':r['details'],'configured':True})
+    if not any(m['method']=='bank' for m in methods): methods.append({'method':'bank','key':'bank','label':'Банковский перевод','details':'','configured':False})
+    methods.sort(key=lambda m:(m['method']!='crypto',m.get('currency',''),m.get('network','')))
+    return jsonify({'country':user['country'],'methods':methods,'bank_request':dict(bank_request) if bank_request else None,'demo_only':True,'real_payments_enabled':False})
+
+@app.post('/api/demo-bank-request')
+def create_demo_bank_request():
+    if not TG_TOKEN or not TG_ADMIN_IDS: return jsonify({'error':'Администратор недоступен'}),503
+    user=current_user()
+    if not user: return jsonify({'error':'Login required'}),401
+    sender=str((request.get_json(silent=True) or {}).get('sender_bank','')).strip()[:120]
+    if len(sender)<2: return jsonify({'error':'Укажите банк отправителя'}),400
+    conn=db()
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        existing=conn.execute("SELECT id FROM demo_bank_requests WHERE user_id=? AND status='PENDING'",(user['id'],)).fetchone()
+        if existing: return jsonify({'error':'Запрос реквизитов уже отправлен'}),409
+        cur=conn.execute('INSERT INTO demo_bank_requests(user_id,sender_bank) VALUES(?,?)',(user['id'],sender))
+        rid=cur.lastrowid;conn.commit()
+    finally: conn.close()
+    for admin in TG_ADMIN_IDS:
+        telegram_send(admin,f'🏦 Запрос тестовых банковских реквизитов #{rid}\nПользователь: {user["public_id"]}\nСтрана: {user["country"]}\nБанк отправителя: {sender}\nПосле настройки реквизитов через /geo пользователь увидит уведомление на сайте.',admin_menu())
+    return jsonify({'ok':True,'request_id':rid,'message':'Запрос отправлен. Когда реквизиты появятся, вы увидите уведомление на сайте.'}),202
+
+@app.get('/api/demo-bank-notification')
+def demo_bank_notification():
+    user=current_user()
+    if not user: return jsonify({'error':'Login required'}),401
+    conn=db()
+    row=conn.execute("SELECT id FROM demo_bank_requests WHERE user_id=? AND status='READY' AND notified_at IS NULL ORDER BY id LIMIT 1",(user['id'],)).fetchone()
+    if row:
+        conn.execute('UPDATE demo_bank_requests SET notified_at=CURRENT_TIMESTAMP WHERE id=?',(row['id'],));conn.commit()
+    conn.close()
+    return jsonify({'available':bool(row),'message':'Тестовые банковские реквизиты теперь доступны в разделе пополнения.' if row else ''})
 
 @app.post('/telegram/webhook')
 def telegram_webhook():
@@ -967,16 +1013,19 @@ def telegram_webhook():
         elif cmd=='/stats': admin_stats(actor)
         elif cmd=='/geo':
             parts=[p.strip() for p in text[5:].split('|')]
-            if len(parts)==4 and parts[0] in COUNTRIES_ES+['ALL'] and parts[1] in ('crypto','bank') and 1<=len(parts[2])<=80 and 1<=len(parts[3])<=400:
+            if len(parts)==4 and parts[0] in COUNTRIES_ES+['ALL'] and (parts[1] in ('crypto','bank') or re.fullmatch(r'crypto:[A-Za-z0-9]{2,12}:[A-Za-z0-9]{2,20}',parts[1])) and 1<=len(parts[2])<=80 and 1<=len(parts[3])<=400:
                 # Never store or display live payment instructions in the demo platform.
                 if not ('тест' in parts[3].lower() or 'demo' in parts[3].lower() or 'sample' in parts[3].lower()):
                     telegram_send(actor,'Укажите в описании «Тестовый» / DEMO / SAMPLE. Настоящие реквизиты для оплаты в демо-версии не публикуются.',admin_menu())
                 else:
-                    conn=db();conn.execute('INSERT INTO geo_demo_methods(country,method,label,details) VALUES(?,?,?,?) ON CONFLICT(country,method) DO UPDATE SET label=excluded.label,details=excluded.details,enabled=1',tuple(parts));admin_audit(conn,actor,'geo_set',None,parts[0]+' / '+parts[1]);conn.commit();conn.close();telegram_send(actor,'ДЕМО-реквизиты обновлены для '+parts[0],admin_menu())
+                    conn=db();conn.execute('INSERT INTO geo_demo_methods(country,method,label,details) VALUES(?,?,?,?) ON CONFLICT(country,method) DO UPDATE SET label=excluded.label,details=excluded.details,enabled=1',tuple(parts));admin_audit(conn,actor,'geo_set',None,parts[0]+' / '+parts[1]);
+                    if parts[1]=='bank':
+                        conn.execute("UPDATE demo_bank_requests SET status='READY' WHERE status='PENDING' AND user_id IN (SELECT id FROM users WHERE country=?)",(parts[0],)) if parts[0]!='ALL' else conn.execute("UPDATE demo_bank_requests SET status='READY' WHERE status='PENDING'")
+                    conn.commit();conn.close();telegram_send(actor,'ДЕМО-реквизиты обновлены для '+parts[0]+'. Пользователи с ожидающими запросами банка получат уведомление на сайте.',admin_menu())
             else: admin_geo(actor)
         elif cmd=='/geodel':
             parts=[p.strip() for p in text[8:].split('|')]
-            if len(parts)==2 and parts[1] in ('crypto','bank'):
+            if len(parts)==2 and (parts[1] in ('crypto','bank') or parts[1].startswith('crypto:')):
                 conn=db();conn.execute('DELETE FROM geo_demo_methods WHERE country=? AND method=?',tuple(parts));admin_audit(conn,actor,'geo_delete',None,' / '.join(parts));conn.commit();conn.close();telegram_send(actor,'Настройка удалена.',admin_menu())
             else: admin_geo(actor)
         elif cmd=='/setbalance':
