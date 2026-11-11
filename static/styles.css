@@ -154,3 +154,24 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{ou
 .v25-amount{padding:12px;border-radius:12px;border:1px solid #2b5849;background:#10251f;color:white;width:100%;box-sizing:border-box}
 .v25-estimate{font-size:13px;color:#8ef1b6}
 #v25Status{font-size:13px;color:#b9e5d2;margin:12px 0;line-height:1.5}
+
+/* V26: separated demo payment method picker and details */
+.v26-deposit{position:relative;box-sizing:border-box;padding:26px 18px 18px;max-height:min(86vh,780px);overflow-y:auto;scrollbar-width:thin}
+.v26-deposit .v26-close{position:absolute;top:12px;right:12px;display:grid;place-items:center;line-height:1;font-size:22px;padding:0;width:34px;height:34px;min-width:34px;flex:none;z-index:3}
+.v26-deposit h2{padding:0 22px;font-size:22px;line-height:1.16;margin:10px 0 10px}
+.v26-choices{display:grid;gap:11px;margin:18px 0}
+.v26-choice{width:100%;display:flex;align-items:center;gap:12px;text-align:left;padding:14px 12px;border-radius:15px;border:1px solid #35664e;background:#10271f;color:#e8fff1;cursor:pointer;min-height:74px}
+.v26-choice:focus-visible,.v26-copy:focus-visible,.v26-back:focus-visible{outline:2px solid #76efab;outline-offset:2px}
+.v26-method-icon{width:40px;height:40px;flex:none;display:grid;place-items:center}.v26-method-icon svg{width:38px;height:38px}
+.v26-choice-content{min-width:0;flex:1;display:grid;gap:5px}.v26-choice-content strong{font-size:14px}.v26-choice-content small{font-size:11px;color:#a5c9b9;line-height:1.4}
+.v26-bonus{font-size:10px;color:#071a10;background:#75eaa3;border-radius:999px;padding:6px 8px;font-weight:800;white-space:nowrap}
+.v26-arrow{font-size:26px;color:#7ce9aa;line-height:1}
+.v26-details[hidden],.v26-choices[hidden]{display:none!important}
+.v26-back{background:none;border:0;color:#80edb0;padding:9px 0;cursor:pointer;text-align:left;font-weight:700}
+.v26-section-title{font-size:16px;color:#e9fff0;margin:10px 0 13px}
+.v26-detail-fields{display:grid;gap:9px}.v26-detail-row{background:#10261e;border:1px solid #2b5343;border-radius:12px;padding:11px;min-width:0}
+.v26-detail-label{display:block;color:#96b9a8;font-size:11px;margin-bottom:7px}.v26-detail-content{display:flex;align-items:center;justify-content:space-between;gap:9px;min-width:0}
+.v26-detail-value{display:block;overflow-wrap:anywhere;word-break:break-word;min-width:0;color:#f0fff5;font-size:13px;font-weight:650;line-height:1.5}
+.v26-copy{flex:none;border:1px solid #458266;border-radius:9px;padding:8px;background:#193d2d;color:#9cf6bc;font-size:11px;font-weight:700;cursor:pointer}
+.v26-warning{font-size:11px!important;color:#ffcc9e!important;text-align:left!important;margin:13px 0!important;line-height:1.5}
+@media(max-width:390px){.v26-deposit{padding:25px 13px 14px}.v26-choice{gap:8px;padding:11px 9px}.v26-bonus{font-size:9px;padding:5px}.v26-method-icon{width:32px}.v26-method-icon svg{width:32px;height:32px}.v26-deposit h2{font-size:20px}}

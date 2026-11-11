@@ -1,0 +1,1 @@
+Orbitra V27 — email + password authentication. Name/surname optional in profile; ORB-ID only in profile. Existing users: while still logged in, add email in profile before logging out. Existing accounts without an active session require account recovery/migration; do not create duplicate accounts. DEMO only. Persistent database is still recommended.

@@ -133,7 +133,7 @@ def init_db():
         FOREIGN KEY(user_id) REFERENCES users(id)
     )''')
     cols = {r['name'] for r in conn.execute('PRAGMA table_info(users)').fetchall()}
-    for col, definition in [('public_id','TEXT'),('first_name','TEXT'),('last_name','TEXT'),('country','TEXT'),('demo_balance','REAL NOT NULL DEFAULT 1000'),('password_hash','TEXT')]:
+    for col, definition in [('public_id','TEXT'),('first_name','TEXT'),('last_name','TEXT'),('country','TEXT'),('demo_balance','REAL NOT NULL DEFAULT 1000'),('password_hash','TEXT'),('email','TEXT')]:
         if col not in cols:
             conn.execute(f'ALTER TABLE users ADD COLUMN {col} {definition}')
     rows = conn.execute('SELECT id, public_id, first_name, last_name FROM users').fetchall()
@@ -145,6 +145,7 @@ def init_db():
         if not row['last_name']:
             conn.execute('UPDATE users SET last_name=? WHERE id=?', ('Orbitra', row['id']))
     conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_public_id ON users(public_id)')
+    conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email COLLATE NOCASE) WHERE email IS NOT NULL')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_trades_user_status ON demo_trades(user_id, status)')
     conn.execute('''CREATE TABLE IF NOT EXISTS bot_demo (user_id INTEGER PRIMARY KEY, state_json TEXT NOT NULL, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(user_id) REFERENCES users(id))''')
     conn.execute('''CREATE TABLE IF NOT EXISTS demo_deposit_requests (
@@ -177,7 +178,7 @@ def current_user():
     uid = session.get('user_id')
     if not uid: return None
     conn = db()
-    user = conn.execute('SELECT id, public_id, first_name, last_name, country, demo_balance, password_hash FROM users WHERE id=?',(uid,)).fetchone()
+    user = conn.execute('SELECT id, public_id, first_name, last_name, country, demo_balance, password_hash, email FROM users WHERE id=?',(uid,)).fetchone()
     conn.close(); return user
 
 
@@ -338,34 +339,78 @@ def index():
     just_registered_id = session.pop('just_registered_id','')
     return render_template('index.html', just_registered_id=just_registered_id)
 
+EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
 @app.post('/register')
 def register():
-    first_name=request.form.get('first_name','').strip(); last_name=request.form.get('last_name','').strip(); country=request.form.get('country','').strip()
-    if len(first_name)<2 or len(last_name)<2:
-        flash('Introduce tu nombre y apellido.','error'); return redirect(url_for('index')+'#register')
-    if country not in COUNTRIES_ES:
-        flash('Selecciona tu país de la lista.','error'); return redirect(url_for('index')+'#register')
+    email=request.form.get('email','').strip().lower()
+    country=request.form.get('country','').strip()
     password=request.form.get('password','')
+    if len(email)>254 or not EMAIL_PATTERN.fullmatch(email):
+        flash('Введите корректный адрес электронной почты.','error'); return redirect(url_for('index')+'#register')
+    if country not in COUNTRIES_ES:
+        flash('Выберите страну из списка.','error'); return redirect(url_for('index')+'#register')
     if len(password)<8:
-        flash('La contraseña debe tener al menos 8 caracteres.','error'); return redirect(url_for('index')+'#register')
-    conn=db(); public_id=generate_public_id(conn)
-    cur=conn.execute('INSERT INTO users(public_id,first_name,last_name,country,demo_balance,password_hash) VALUES(?,?,?,?,1000,?)',(public_id,first_name,last_name,country,generate_password_hash(password))); user_id=cur.lastrowid
-    conn.commit(); conn.close()
+        flash('Пароль должен содержать минимум 8 символов.','error'); return redirect(url_for('index')+'#register')
+    conn=db()
+    try:
+        public_id=generate_public_id(conn)
+        cur=conn.execute('INSERT INTO users(public_id,email,first_name,last_name,country,demo_balance,password_hash) VALUES(?,?,?,?,?,1000,?)',
+                         (public_id,email,'','',country,generate_password_hash(password)))
+        user_id=cur.lastrowid
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback(); flash('Этот email уже зарегистрирован. Войдите в аккаунт.','error'); return redirect(url_for('index')+'#register')
+    finally:
+        conn.close()
     for admin_id in TG_ADMIN_IDS:
-        telegram_send(admin_id, f'🆕 Новая регистрация\nID: {public_id}\nИмя: {first_name} {last_name}\nГЕО: {country}\nБаланс: 1000.00 DEMO USDT', [[{'text':'👤 Открыть профиль','callback_data':f'user:{user_id}'}]])
-    # Guest training positions/history intentionally do not migrate into a real profile.
+        telegram_send(admin_id, f'🆕 Новая DEMO-регистрация\nID: {public_id}\nEmail: {email}\nГЕО: {country}\nБаланс: 1000.00 DEMO USDT', [[{'text':'👤 Открыть профиль','callback_data':f'user:{user_id}'}]])
     session.pop('guest_demo_balance',None); session.pop('guest_demo_trades',None)
     session['guest_demo_version']=3
     session['user_id']=user_id; session['just_registered_id']=public_id
-    return redirect(url_for('index')+'#bot')
+    return redirect(url_for('index')+'#profile')
 
 @app.post('/login')
 def login():
-    public_id=request.form.get('public_id','').strip().upper(); first_name=request.form.get('first_name','').strip(); last_name=request.form.get('last_name','').strip(); password=request.form.get('password','')
-    conn=db(); user=conn.execute('''SELECT * FROM users WHERE UPPER(public_id)=UPPER(?) AND LOWER(first_name)=LOWER(?) AND LOWER(last_name)=LOWER(?)''',(public_id,first_name,last_name)).fetchone(); conn.close()
+    email=request.form.get('email','').strip().lower()
+    password=request.form.get('password','')
+    conn=db(); user=conn.execute('SELECT * FROM users WHERE email=? COLLATE NOCASE',(email,)).fetchone(); conn.close()
     if not user or not user['password_hash'] or not check_password_hash(user['password_hash'], password):
-        flash('Datos de acceso incorrectos.','error'); return redirect(url_for('index')+'#login')
-    session.clear(); session['user_id']=user['id']; flash('Sesión iniciada.','success'); return redirect(url_for('index')+'#profile')
+        flash('Неверная почта или пароль.','error'); return redirect(url_for('index')+'#login')
+    session.clear(); session['user_id']=user['id']; flash('Вы вошли в аккаунт.','success'); return redirect(url_for('index')+'#profile')
+
+@app.post('/profile/details')
+def update_profile_details():
+    user=current_user()
+    if not user: return redirect(url_for('index')+'#login')
+    first=request.form.get('first_name','').strip()
+    last=request.form.get('last_name','').strip()
+    if len(first)>80 or len(last)>80:
+        flash('Имя и фамилия должны быть короче 80 символов.','error'); return redirect(url_for('index')+'#profile')
+    conn=db(); conn.execute('UPDATE users SET first_name=?,last_name=? WHERE id=?',(first,last,user['id']))
+    conn.commit(); conn.close()
+    flash('Профиль обновлён.','success'); return redirect(url_for('index')+'#profile')
+
+@app.post('/profile/email')
+def update_profile_email():
+    user=current_user()
+    if not user: return redirect(url_for('index')+'#login')
+    email=request.form.get('email','').strip().lower()
+    password=request.form.get('password','')
+    if len(email)>254 or not EMAIL_PATTERN.fullmatch(email):
+        flash('Введите корректный email.','error'); return redirect(url_for('index')+'#profile')
+    if not check_password_hash(user['password_hash'], password):
+        flash('Неверный пароль.','error'); return redirect(url_for('index')+'#profile')
+    conn=db()
+    try:
+        conn.execute('UPDATE users SET email=? WHERE id=?',(email,user['id']));conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback(); flash('Этот email уже используется.','error')
+    else:
+        flash('Email сохранён.','success')
+    finally:
+        conn.close()
+    return redirect(url_for('index')+'#profile')
 
 @app.post('/set-password')
 def set_password():
@@ -412,7 +457,7 @@ def locale_api():
 def account_api():
     user=current_user()
     if not user: return jsonify({'authenticated':False}),401
-    return jsonify({'authenticated':True,'id':user['public_id'],'first_name':user['first_name'],'last_name':user['last_name'],'country':user['country'],'demo_balance':round(user['demo_balance'],2),'has_password':bool(user['password_hash'])})
+    return jsonify({'authenticated':True,'id':user['public_id'],'first_name':user['first_name'],'last_name':user['last_name'],'country':user['country'],'email':user['email'],'demo_balance':round(user['demo_balance'],2),'has_password':bool(user['password_hash'])})
 
 @app.get('/api/market/<symbol>/candles')
 def candles_api(symbol):
@@ -848,6 +893,8 @@ def create_demo_topup():
     try:
         conn.execute('BEGIN IMMEDIATE')
         row=conn.execute('SELECT label FROM geo_demo_methods WHERE country IN (?,?) AND method=? AND enabled=1 ORDER BY CASE WHEN country=? THEN 0 ELSE 1 END LIMIT 1',(user['country'],'ALL',method,user['country'])).fetchone()
+        if not row and method=='bank':
+            row={'label':'Банковский перевод · DEMO образец'}
         if not row: return jsonify({'error':'This DEMO method is not available for your region'}),400
         pending=conn.execute("SELECT 1 FROM demo_topup_requests WHERE user_id=? AND status='PENDING'",(user['id'],)).fetchone()
         if pending: return jsonify({'error':'You already have a pending DEMO top-up'}),409
@@ -863,7 +910,10 @@ def demo_payment_methods():
     user=current_user()
     if not user: return jsonify({'error':'Login required'}),401
     conn=db();rows=conn.execute('SELECT method,label,details FROM geo_demo_methods WHERE country IN (?,?) AND enabled=1 ORDER BY CASE WHEN country=? THEN 0 ELSE 1 END,CASE WHEN method="crypto" THEN 0 ELSE 1 END,method',(user['country'],'ALL',user['country'])).fetchall();conn.close()
-    return jsonify({'country':user['country'],'methods':[dict(r) for r in rows],'demo_only':True,'real_payments_enabled':False})
+    methods=[dict(r) for r in rows]
+    if not any(m['method']=='bank' for m in methods):
+        methods.append({'method':'bank','label':'Банковский перевод · DEMO образец','details':'Банк: SAMPLE BANK; IBAN: SAMPLE-ONLY-NO-PAYMENT; Получатель: ORBITRA DEMO'})
+    return jsonify({'country':user['country'],'methods':methods,'demo_only':True,'real_payments_enabled':False})
 
 @app.post('/telegram/webhook')
 def telegram_webhook():

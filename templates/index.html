@@ -52,6 +52,7 @@
     <div id="screen" class="screen"
          data-auth="{{ '1' if user else '0' }}"
          data-id="{{ user['public_id'] if user else '' }}"
+         data-email="{{ user['email'] if user else '' }}"
          data-first-name="{{ user['first_name'] if user else '' }}"
          data-last-name="{{ user['last_name'] if user else '' }}"
          data-country="{{ user['country'] if user else '' }}"
