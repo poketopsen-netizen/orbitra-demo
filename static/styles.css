@@ -179,3 +179,9 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{ou
 /* V30: consistent square close control, independent of inherited result-modal styles */
 .v26-deposit .result-close.v26-close{position:absolute!important;inset:12px 12px auto auto!important;transform:none!important;display:flex!important;align-items:center!important;justify-content:center!important;width:36px!important;height:36px!important;min-width:36px!important;min-height:36px!important;max-width:36px!important;max-height:36px!important;margin:0!important;padding:0!important;line-height:1!important;text-align:center!important;border-radius:12px!important;box-sizing:border-box!important;font-family:Arial,sans-serif!important;font-size:22px!important;}
 .v26-deposit .v26-close::before,.v26-deposit .v26-close::after{display:none!important;}
+
+/* V32: category-first demo payment picker and distinct coin emblems */
+.v26-choices .v26-choices{margin:0}
+.v32-coin-symbol{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:800;font-size:22px;font-family:Arial,sans-serif}
+.v26-method-icon img{display:block;width:38px;height:38px;object-fit:contain}
+.v26-choices[hidden],.v26-details[hidden]{display:none!important}
