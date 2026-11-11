@@ -905,7 +905,7 @@ def create_demo_topup():
     sender_bank=str(data.get('sender_bank','')).strip()[:120]
     activation=bool(data.get('activation'))
     if method not in ('bank','crypto'): return jsonify({'error':'Unknown method'}),400
-    if method=='bank' and not sender_bank: return jsonify({'error':'Укажите банк отправителя'}),400
+    if method=='bank' and not sender_bank: sender_bank='Не указан (тестовый сценарий)'
     if activation and cents<5000: return jsonify({'error':'Для DEMO-активации требуется заявка от 50 USDT'}),400
     conn=db()
     try:
@@ -914,14 +914,15 @@ def create_demo_topup():
             return jsonify({'error':'Invalid currency/network'}),400
         if method=='bank': method_key='bank'
         row=conn.execute('SELECT label FROM geo_demo_methods WHERE country IN (?,?) AND method=? AND enabled=1 ORDER BY CASE WHEN country=? THEN 0 ELSE 1 END LIMIT 1',(user['country'],'ALL',method_key,user['country'])).fetchone()
-        if not row: return jsonify({'error':'Для выбранной криптовалюты или банка тестовые реквизиты ещё не настроены'}),400
+        if not row and method=='bank': return jsonify({'error':'Банковские реквизиты пока не настроены'}),400
+        method_label=row['label'] if row else 'USDT TRC20 · учебный адрес (не для переводов)'
         pending=conn.execute("SELECT 1 FROM demo_topup_requests WHERE user_id=? AND status='PENDING'",(user['id'],)).fetchone()
         if pending: return jsonify({'error':'You already have a pending DEMO top-up'}),409
         bonus=round(cents*0.10) if method=='crypto' else 0
-        cur=conn.execute('INSERT INTO demo_topup_requests(user_id,amount_cents,bonus_cents,method,method_label,sender_bank,activation_requested) VALUES(?,?,?,?,?,?,?)',(user['id'],cents,bonus,method,row['label'],sender_bank,int(activation)))
+        cur=conn.execute('INSERT INTO demo_topup_requests(user_id,amount_cents,bonus_cents,method,method_label,sender_bank,activation_requested) VALUES(?,?,?,?,?,?,?)',(user['id'],cents,bonus,method,method_label,sender_bank,int(activation)))
         rid=cur.lastrowid;conn.commit()
     finally: conn.close()
-    topup_notice(rid,user['public_id'],user['country'],cents/100,bonus/100,row['label'],sender_bank,activation)
+    topup_notice(rid,user['public_id'],user['country'],cents/100,bonus/100,method_label,sender_bank,activation)
     return jsonify({'ok':True,'request_id':rid,'amount':cents/100,'bonus':bonus/100,'pending':True,'demo_only':True}),202
 
 @app.get('/api/demo-payment-methods')
@@ -945,6 +946,7 @@ def demo_payment_methods():
             currency=(parts[1] if len(parts)>1 else (re.search(r'USDT|USDC|BTC|ETH|TON|TRX|BNB|SOL',r['label'],re.I) or ['USDT'])[0]).upper()
             network=(parts[2] if len(parts)>2 else (re.search(r'TRC20|ERC20|BEP20|TON|SOLANA|POLYGON|BASE',r['label'],re.I) or ['TRC20'])[0]).upper()
             methods.append({'method':'crypto','key':key,'currency':currency,'network':network,'label':r['label'],'details':r['details'],'configured':True})
+    if not any(m['method']=='crypto' for m in methods): methods.append({'method':'crypto','key':'crypto:USDT:TRC20','currency':'USDT','network':'TRC20','label':'USDT · TRC20 (DEMO)','details':'Тестовый адрес: DEMO-ONLY-NOT-A-WALLET','configured':False})
     if not any(m['method']=='bank' for m in methods): methods.append({'method':'bank','key':'bank','label':'Банковский перевод','details':'','configured':False})
     methods.sort(key=lambda m:(m['method']!='crypto',m.get('currency',''),m.get('network','')))
     return jsonify({'country':user['country'],'methods':methods,'bank_request':dict(bank_request) if bank_request else None,'demo_only':True,'real_payments_enabled':False})

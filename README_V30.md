@@ -1,0 +1,1 @@
+Orbitra V30 — DEMO payment flow. Crypto option always shown, with non-payable placeholder when not configured. Bank displays configured name, request only when absent. DEMO verification goes to Telegram for manual approval. No real funds are accepted.

@@ -175,3 +175,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{ou
 .v26-copy{flex:none;border:1px solid #458266;border-radius:9px;padding:8px;background:#193d2d;color:#9cf6bc;font-size:11px;font-weight:700;cursor:pointer}
 .v26-warning{font-size:11px!important;color:#ffcc9e!important;text-align:left!important;margin:13px 0!important;line-height:1.5}
 @media(max-width:390px){.v26-deposit{padding:25px 13px 14px}.v26-choice{gap:8px;padding:11px 9px}.v26-bonus{font-size:9px;padding:5px}.v26-method-icon{width:32px}.v26-method-icon svg{width:32px;height:32px}.v26-deposit h2{font-size:20px}}
+
+/* V30: consistent square close control, independent of inherited result-modal styles */
+.v26-deposit .result-close.v26-close{position:absolute!important;inset:12px 12px auto auto!important;transform:none!important;display:flex!important;align-items:center!important;justify-content:center!important;width:36px!important;height:36px!important;min-width:36px!important;min-height:36px!important;max-width:36px!important;max-height:36px!important;margin:0!important;padding:0!important;line-height:1!important;text-align:center!important;border-radius:12px!important;box-sizing:border-box!important;font-family:Arial,sans-serif!important;font-size:22px!important;}
+.v26-deposit .v26-close::before,.v26-deposit .v26-close::after{display:none!important;}
