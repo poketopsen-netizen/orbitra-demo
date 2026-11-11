@@ -156,6 +156,8 @@ def init_db():
         reviewed_at TEXT, reviewed_by TEXT
     )''')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_deposit_user ON demo_deposit_requests(user_id, status)')
+    conn.execute("CREATE TABLE IF NOT EXISTS geo_demo_methods (country TEXT NOT NULL, method TEXT NOT NULL, label TEXT NOT NULL, details TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(country,method))")
+    conn.execute("CREATE TABLE IF NOT EXISTS admin_audit (id INTEGER PRIMARY KEY AUTOINCREMENT, admin_id TEXT NOT NULL, user_id INTEGER, action TEXT NOT NULL, details TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)")
     conn.commit(); conn.close()
 
 
@@ -337,6 +339,8 @@ def register():
     conn=db(); public_id=generate_public_id(conn)
     cur=conn.execute('INSERT INTO users(public_id,first_name,last_name,country,demo_balance,password_hash) VALUES(?,?,?,?,1000,?)',(public_id,first_name,last_name,country,generate_password_hash(password))); user_id=cur.lastrowid
     conn.commit(); conn.close()
+    for admin_id in TG_ADMIN_IDS:
+        telegram_send(admin_id, f'🆕 Новая регистрация\nID: {public_id}\nИмя: {first_name} {last_name}\nГЕО: {country}\nБаланс: 1000.00 DEMO USDT', [[{'text':'👤 Открыть профиль','callback_data':f'user:{user_id}'}]])
     # Guest training positions/history intentionally do not migrate into a real profile.
     session.pop('guest_demo_balance',None); session.pop('guest_demo_trades',None)
     session['guest_demo_version']=3
@@ -689,6 +693,41 @@ def telegram_send(chat_id, text, keyboard=None):
         app.logger.warning('Telegram notification failed: %s',type(exc).__name__)
         return False
 
+def admin_menu():
+    return [[{'text':'👥 Пользователи','callback_data':'menu:users'},{'text':'💰 Балансы','callback_data':'menu:balances'}],
+            [{'text':'📥 Заявки','callback_data':'menu:pending'},{'text':'🌍 ГЕО и реквизиты','callback_data':'menu:geo'}],
+            [{'text':'📊 Статистика','callback_data':'menu:stats'},{'text':'🏠 Главное меню','callback_data':'menu:home'}]]
+
+def admin_audit(conn, actor, action, user_id=None, details=''):
+    conn.execute('INSERT INTO admin_audit(admin_id,user_id,action,details) VALUES(?,?,?,?)',(str(actor),user_id,action,details))
+
+def admin_users(actor):
+    conn=db()
+    rows=conn.execute('SELECT id,public_id,first_name,country,demo_balance FROM users ORDER BY id DESC LIMIT 20').fetchall()
+    conn.close()
+    telegram_send(actor,'👥 Последние пользователи (до 20). Выберите профиль:',[[{'text':f"{r['public_id']} · {r['demo_balance']:.2f} DEMO",'callback_data':f"user:{r['id']}"}] for r in rows] + [[{'text':'🏠 Меню','callback_data':'menu:home'}]] if rows else admin_menu())
+
+def admin_profile(actor, uid):
+    conn=db(); r=conn.execute('SELECT id,public_id,first_name,last_name,country,demo_balance,created_at FROM users WHERE id=?',(uid,)).fetchone();conn.close()
+    if not r: return telegram_send(actor,'Пользователь не найден.',admin_menu())
+    telegram_send(actor,f"👤 {r['public_id']}\n{r['first_name']} {r['last_name']}\nГЕО: {r['country']}\nБаланс: {r['demo_balance']:.2f} DEMO USDT\nРегистрация: {r['created_at']}\n\nБаланс виртуальный, не подлежит выводу.",[[{'text':'✏️ Установить DEMO-баланс','callback_data':f"balance:{uid}"}],[{'text':'👥 К пользователям','callback_data':'menu:users'}]])
+
+def admin_pending(actor):
+    conn=db();rows=conn.execute("SELECT d.id,d.amount_cents,u.public_id,u.country FROM demo_deposit_requests d JOIN users u ON u.id=d.user_id WHERE d.status='PENDING' ORDER BY d.id DESC LIMIT 20").fetchall();conn.close()
+    telegram_send(actor,f'📥 Ожидают DEMO-заявки: {len(rows)}',admin_menu())
+    for r in rows:
+        telegram_send(actor,f"#{r['id']} · {r['public_id']} · {r['country']} · {r['amount_cents']/100:.2f} DEMO USDT\nНикакой реальной оплаты не требуется.",[[{'text':'✅ Одобрить DEMO','callback_data':f"dep:a:{r['id']}"},{'text':'❌ Отклонить','callback_data':f"dep:r:{r['id']}"}]])
+
+def admin_stats(actor):
+    conn=db(); users=conn.execute('SELECT COUNT(*) FROM users').fetchone()[0];pending=conn.execute("SELECT COUNT(*) FROM demo_deposit_requests WHERE status='PENDING'").fetchone()[0];approved=conn.execute("SELECT COUNT(*) FROM demo_deposit_requests WHERE status='APPROVED'").fetchone()[0];conn.close()
+    telegram_send(actor,f'📊 Статистика\nПользователей: {users}\nОжидают: {pending}\nDEMO-активаций: {approved}',admin_menu())
+
+def admin_geo(actor):
+    conn=db(); rows=conn.execute('SELECT country,method,label FROM geo_demo_methods ORDER BY country,method LIMIT 30').fetchall();conn.close()
+    lines=['🌍 ГЕО · ДЕМО-инструкции','Для настройки отправьте сообщение:','/geo Страна | crypto или bank | Название | Описание','Пример:','/geo Albania | crypto | USDT TRC20 | Тестовый адрес: SAMPLE-ONLY','Для удаления: /geodel Albania | crypto','ВАЖНО: реальные платежи не принимаются.','']
+    lines += [f"{r['country']} · {r['method']} · {r['label']}" for r in rows]
+    telegram_send(actor,'\n'.join(lines),admin_menu())
+
 def deposit_notice(request_id, user, country):
     for admin_id in TG_ADMIN_IDS:
         telegram_send(admin_id,
@@ -751,44 +790,70 @@ def review_demo_request(request_id, approve, admin_id):
         return f"#{request_id} · {row['public_id']} · "+('50 DEMO USDT активированы' if approve else 'отклонена')
     finally: conn.close()
 
+@app.get('/api/demo-payment-methods')
+def demo_payment_methods():
+    user=current_user()
+    if not user: return jsonify({'error':'Login required'}),401
+    conn=db();rows=conn.execute('SELECT method,label,details FROM geo_demo_methods WHERE country IN (?,?) AND enabled=1 ORDER BY CASE WHEN country=? THEN 0 ELSE 1 END,method',(user['country'],'ALL',user['country'])).fetchall();conn.close()
+    return jsonify({'country':user['country'],'methods':[dict(r) for r in rows],'demo_only':True,'real_payments_enabled':False})
+
 @app.post('/telegram/webhook')
 def telegram_webhook():
-    if not TG_TOKEN or not TG_WEBHOOK_SECRET or not TG_ADMIN_IDS:
-        return jsonify({'error':'Telegram not configured'}),503
-    provided=request.headers.get('X-Telegram-Bot-Api-Secret-Token','')
-    if not hmac.compare_digest(provided,TG_WEBHOOK_SECRET): return jsonify({'error':'Forbidden'}),403
-    data=request.get_json(silent=True) or {}
-    msg=data.get('message') or {}; callback=data.get('callback_query') or {}
+    if not TG_TOKEN or not TG_WEBHOOK_SECRET or not TG_ADMIN_IDS: return jsonify({'error':'Telegram not configured'}),503
+    if not hmac.compare_digest(request.headers.get('X-Telegram-Bot-Api-Secret-Token',''),TG_WEBHOOK_SECRET): return jsonify({'error':'Forbidden'}),403
+    data=request.get_json(silent=True) or {};msg=data.get('message') or {};callback=data.get('callback_query') or {}
     actor=(callback.get('from') or msg.get('from') or {}).get('id')
     if actor not in TG_ADMIN_IDS: return jsonify({'ok':True})
     if callback:
-        payload=callback.get('data',''); match=re.fullmatch(r'dep:([ar]):([0-9]{1,12})',payload)
+        payload=callback.get('data','')
+        telegram_answer_callback(callback.get('id',''),'Принято')
+        match=re.fullmatch(r'dep:([ar]):([0-9]{1,12})',payload)
         if match:
             result=review_demo_request(int(match.group(2)),match.group(1)=='a',actor)
-            telegram_answer_callback(callback.get('id',''),result)
-            telegram_send(actor,result)
+            telegram_send(actor,result,admin_menu())
+        elif payload=='menu:home': telegram_send(actor,'🏠 Orbitra DEMO · панель администратора',admin_menu())
+        elif payload in ('menu:users','menu:balances'): admin_users(actor)
+        elif payload=='menu:pending': admin_pending(actor)
+        elif payload=='menu:stats': admin_stats(actor)
+        elif payload=='menu:geo': admin_geo(actor)
+        elif re.fullmatch(r'user:[0-9]+',payload): admin_profile(actor,int(payload.split(':')[1]))
+        elif re.fullmatch(r'balance:[0-9]+',payload):
+            uid=int(payload.split(':')[1]);telegram_send(actor,f'✏️ Установить баланс пользователю #{uid}\nОтправьте сообщение:\n/setbalance {uid} 250.00\nСумма заменит текущий DEMO-баланс; операция записывается в журнал.')
     else:
-        cmd=(msg.get('text') or '').split(' ')[0].split('@')[0]
-        conn=db()
-        try:
-            if cmd in ('/start','/help'):
-                response='Orbitra DEMO Admin\n/users — последние пользователи\n/pending — заявки на активацию\n/stats — статистика\nВсе суммы виртуальные, реальных платежей нет.'
-            elif cmd=='/stats':
-                users=conn.execute('SELECT COUNT(*) FROM users').fetchone()[0]
-                pending=conn.execute("SELECT COUNT(*) FROM demo_deposit_requests WHERE status='PENDING'").fetchone()[0]
-                approved=conn.execute("SELECT COUNT(*) FROM demo_deposit_requests WHERE status='APPROVED'").fetchone()[0]
-                response=f'Пользователей: {users}\nОжидают: {pending}\nDEMO-активаций: {approved}'
-            elif cmd=='/users':
-                rows=conn.execute('SELECT public_id,first_name,country,created_at FROM users ORDER BY id DESC LIMIT 15').fetchall()
-                response='Последние регистрации:\n'+'\n'.join(f"{r['public_id']} · {r['first_name']} · {r['country']} · {r['created_at']}" for r in rows)
-            elif cmd=='/pending':
-                rows=conn.execute("SELECT d.id,u.public_id,u.country FROM demo_deposit_requests d JOIN users u ON u.id=d.user_id WHERE d.status='PENDING' ORDER BY d.id DESC LIMIT 15").fetchall()
-                response='Ожидают DEMO-активации: '+str(len(rows))
-                for r in rows:
-                    telegram_send(actor,f"#{r['id']} · {r['public_id']} · {r['country']} · 50 DEMO USDT",[[{'text':'✅ Одобрить','callback_data':f"dep:a:{r['id']}"},{'text':'❌ Отклонить','callback_data':f"dep:r:{r['id']}"}]])
-            else: response='Команды: /users /pending /stats'
-        finally: conn.close()
-        telegram_send(actor,response)
+        text=(msg.get('text') or '').strip(); cmd=text.split(' ')[0].split('@')[0]
+        if cmd in ('/start','/help','/menu'): telegram_send(actor,'🏠 Orbitra Admin V24\nТолько виртуальные средства DEMO. Выберите раздел:',admin_menu())
+        elif cmd in ('/users','/balances'): admin_users(actor)
+        elif cmd=='/pending': admin_pending(actor)
+        elif cmd=='/stats': admin_stats(actor)
+        elif cmd=='/geo':
+            parts=[p.strip() for p in text[5:].split('|')]
+            if len(parts)==4 and parts[0] in COUNTRIES_ES+['ALL'] and parts[1] in ('crypto','bank') and 1<=len(parts[2])<=80 and 1<=len(parts[3])<=400:
+                # Never store or display live payment instructions in the demo platform.
+                if not ('тест' in parts[3].lower() or 'demo' in parts[3].lower() or 'sample' in parts[3].lower()):
+                    telegram_send(actor,'Укажите в описании «Тестовый» / DEMO / SAMPLE. Настоящие реквизиты для оплаты в демо-версии не публикуются.',admin_menu())
+                else:
+                    conn=db();conn.execute('INSERT INTO geo_demo_methods(country,method,label,details) VALUES(?,?,?,?) ON CONFLICT(country,method) DO UPDATE SET label=excluded.label,details=excluded.details,enabled=1',tuple(parts));admin_audit(conn,actor,'geo_set',None,parts[0]+' / '+parts[1]);conn.commit();conn.close();telegram_send(actor,'ДЕМО-реквизиты обновлены для '+parts[0],admin_menu())
+            else: admin_geo(actor)
+        elif cmd=='/geodel':
+            parts=[p.strip() for p in text[8:].split('|')]
+            if len(parts)==2 and parts[1] in ('crypto','bank'):
+                conn=db();conn.execute('DELETE FROM geo_demo_methods WHERE country=? AND method=?',tuple(parts));admin_audit(conn,actor,'geo_delete',None,' / '.join(parts));conn.commit();conn.close();telegram_send(actor,'Настройка удалена.',admin_menu())
+            else: admin_geo(actor)
+        elif cmd=='/setbalance':
+            m=re.fullmatch(r'/setbalance\s+(\d+)\s+(\d+(?:\.\d{1,2})?)',text)
+            if not m: telegram_send(actor,'Формат: /setbalance ID 250.00')
+            else:
+                uid=int(m.group(1));cents=int(round(float(m.group(2))*100))
+                if cents>100000000: telegram_send(actor,'Максимум: 1 000 000 DEMO USDT.')
+                else:
+                    conn=db()
+                    try:
+                        conn.execute('BEGIN IMMEDIATE');r=conn.execute('SELECT public_id,demo_balance FROM users WHERE id=?',(uid,)).fetchone()
+                        if not r: telegram_send(actor,'Пользователь не найден.')
+                        else:
+                            conn.execute('UPDATE users SET demo_balance=? WHERE id=?',(cents/100,uid));admin_audit(conn,actor,'set_demo_balance',uid,f"{r['demo_balance']:.2f} -> {cents/100:.2f}");conn.commit();telegram_send(actor,f"✅ {r['public_id']}\nDEMO-баланс установлен: {cents/100:.2f} USDT",admin_menu())
+                    finally: conn.close()
+        else: telegram_send(actor,'Выберите раздел в меню:',admin_menu())
     return jsonify({'ok':True})
 
 @app.get('/api/bot-demo/fx')
