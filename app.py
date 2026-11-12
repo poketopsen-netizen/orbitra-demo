@@ -1259,6 +1259,50 @@ def telegram_webhook():
 def bot_fx():
     return jsonify({'error':'FX preview removed from bot view'}),410
 
+
+# Daily indicative fiat conversion for DEMO USDT; 1 DEMO USDT is shown as a USD-equivalent, not a redeemable asset.
+FX_COUNTRY_CURRENCIES = {'isla de la ascension': 'SHP', 'andorra': 'EUR', 'emiratos arabes unidos': 'AED', 'afganistan': 'AFN', 'antigua y barbuda': 'XCD', 'anguila': 'XCD', 'albania': 'ALL', 'armenia': 'AMD', 'angola': 'AOA', 'argentina': 'ARS', 'samoa americana': 'USD', 'austria': 'EUR', 'australia': 'AUD', 'aruba': 'AWG', 'islas aland': 'EUR', 'azerbaiyan': 'AZN', 'bosnia y herzegovina': 'BAM', 'barbados': 'BBD', 'banglades': 'BDT', 'belgica': 'EUR', 'burkina faso': 'XOF', 'bulgaria': 'EUR', 'barein': 'BHD', 'burundi': 'BIF', 'benin': 'XOF', 'san bartolome': 'EUR', 'bermudas': 'BMD', 'brunei': 'BND', 'bolivia': 'BOB', 'caribe neerlandes': 'USD', 'brasil': 'BRL', 'bahamas': 'BSD', 'butan': 'INR', 'isla bouvet': 'NOK', 'botsuana': 'BWP', 'bielorrusia': 'BYN', 'belice': 'BZD', 'canada': 'CAD', 'islas cocos': 'AUD', 'republica democratica del congo': 'CDF', 'republica centroafricana': 'XAF', 'congo': 'XAF', 'suiza': 'CHF', 'cote d’ivoire': 'XOF', 'islas cook': 'NZD', 'chile': 'CLP', 'camerun': 'XAF', 'china': 'CNY', 'colombia': 'COP', 'costa rica': 'CRC', 'cuba': 'CUP', 'cabo verde': 'CVE', 'curazao': 'XCG', 'isla de navidad': 'AUD', 'chipre': 'EUR', 'chequia': 'CZK', 'alemania': 'EUR', 'diego garcia': 'USD', 'yibuti': 'DJF', 'dinamarca': 'DKK', 'dominica': 'XCD', 'republica dominicana': 'DOP', 'argelia': 'DZD', 'ceuta y melilla': 'EUR', 'ecuador': 'USD', 'estonia': 'EUR', 'egipto': 'EGP', 'sahara occidental': 'MAD', 'eritrea': 'ERN', 'espana': 'EUR', 'etiopia': 'ETB', 'union europea': 'EUR', 'finlandia': 'EUR', 'fiyi': 'FJD', 'islas malvinas': 'FKP', 'micronesia': 'USD', 'islas feroe': 'DKK', 'francia': 'EUR', 'gabon': 'XAF', 'reino unido': 'GBP', 'granada': 'XCD', 'georgia': 'GEL', 'guayana francesa': 'EUR', 'guernesey': 'GBP', 'ghana': 'GHS', 'gibraltar': 'GIP', 'groenlandia': 'DKK', 'gambia': 'GMD', 'guinea': 'GNF', 'guadalupe': 'EUR', 'guinea ecuatorial': 'XAF', 'grecia': 'EUR', 'islas georgia del sur y sandwich del sur': 'GBP', 'guatemala': 'GTQ', 'guam': 'USD', 'guinea-bisau': 'XOF', 'guyana': 'GYD', 'rae de hong kong (china)': 'HKD', 'islas heard y mcdonald': 'AUD', 'honduras': 'HNL', 'croacia': 'EUR', 'haiti': 'HTG', 'hungria': 'HUF', 'canarias': 'EUR', 'indonesia': 'IDR', 'irlanda': 'EUR', 'israel': 'ILS', 'isla de man': 'GBP', 'india': 'INR', 'territorio britanico del oceano indico': 'USD', 'irak': 'IQD', 'iran': 'IRR', 'islandia': 'ISK', 'italia': 'EUR', 'jersey': 'GBP', 'jamaica': 'JMD', 'jordania': 'JOD', 'japon': 'JPY', 'kenia': 'KES', 'kirguistan': 'KGS', 'camboya': 'KHR', 'kiribati': 'AUD', 'comoras': 'KMF', 'san cristobal y nieves': 'XCD', 'corea del norte': 'KPW', 'corea del sur': 'KRW', 'kuwait': 'KWD', 'islas caiman': 'KYD', 'kazajistan': 'KZT', 'laos': 'LAK', 'libano': 'LBP', 'santa lucia': 'XCD', 'liechtenstein': 'CHF', 'sri lanka': 'LKR', 'liberia': 'LRD', 'lesoto': 'ZAR', 'lituania': 'EUR', 'luxemburgo': 'EUR', 'letonia': 'EUR', 'libia': 'LYD', 'marruecos': 'MAD', 'monaco': 'EUR', 'moldavia': 'MDL', 'montenegro': 'EUR', 'san martin': 'EUR', 'madagascar': 'MGA', 'islas marshall': 'USD', 'macedonia del norte': 'MKD', 'mali': 'XOF', 'myanmar (birmania)': 'MMK', 'mongolia': 'MNT', 'rae de macao (china)': 'MOP', 'islas marianas del norte': 'USD', 'martinica': 'EUR', 'mauritania': 'MRU', 'montserrat': 'XCD', 'malta': 'EUR', 'mauricio': 'MUR', 'maldivas': 'MVR', 'malaui': 'MWK', 'mexico': 'MXN', 'malasia': 'MYR', 'mozambique': 'MZN', 'namibia': 'ZAR', 'nueva caledonia': 'XPF', 'niger': 'XOF', 'isla norfolk': 'AUD', 'nigeria': 'NGN', 'nicaragua': 'NIO', 'paises bajos': 'EUR', 'noruega': 'NOK', 'nepal': 'NPR', 'nauru': 'AUD', 'niue': 'NZD', 'nueva zelanda': 'NZD', 'oman': 'OMR', 'panama': 'PAB', 'peru': 'PEN', 'polinesia francesa': 'XPF', 'papua nueva guinea': 'PGK', 'filipinas': 'PHP', 'pakistan': 'PKR', 'polonia': 'PLN', 'san pedro y miquelon': 'EUR', 'islas pitcairn': 'NZD', 'puerto rico': 'USD', 'territorios palestinos': 'ILS', 'portugal': 'EUR', 'palaos': 'USD', 'paraguay': 'PYG', 'catar': 'QAR', 'reunion': 'EUR', 'rumania': 'RON', 'serbia': 'RSD', 'rusia': 'RUB', 'ruanda': 'RWF', 'arabia saudi': 'SAR', 'islas salomon': 'SBD', 'seychelles': 'SCR', 'sudan': 'SDG', 'suecia': 'SEK', 'singapur': 'SGD', 'santa elena': 'SHP', 'eslovenia': 'EUR', 'svalbard y jan mayen': 'NOK', 'eslovaquia': 'EUR', 'sierra leona': 'SLE', 'san marino': 'EUR', 'senegal': 'XOF', 'somalia': 'SOS', 'surinam': 'SRD', 'sudan del sur': 'SSP', 'santo tome y principe': 'STN', 'el salvador': 'USD', 'sint maarten': 'XCG', 'siria': 'SYP', 'esuatini': 'SZL', 'tristan de acuna': 'GBP', 'islas turcas y caicos': 'USD', 'chad': 'XAF', 'territorios australes franceses': 'EUR', 'togo': 'XOF', 'tailandia': 'THB', 'tayikistan': 'TJS', 'tokelau': 'NZD', 'timor-leste': 'USD', 'turkmenistan': 'TMT', 'tunez': 'TND', 'tonga': 'TOP', 'turquia': 'TRY', 'trinidad y tobago': 'TTD', 'tuvalu': 'AUD', 'taiwan': 'TWD', 'tanzania': 'TZS', 'ucrania': 'UAH', 'uganda': 'UGX', 'islas menores alejadas de ee. uu.': 'USD', 'estados unidos': 'USD', 'uruguay': 'UYU', 'uzbekistan': 'UZS', 'ciudad del vaticano': 'EUR', 'san vicente y las granadinas': 'XCD', 'venezuela': 'VES', 'islas virgenes britanicas': 'USD', 'islas virgenes de ee. uu.': 'USD', 'vietnam': 'VND', 'vanuatu': 'VUV', 'wallis y futuna': 'XPF', 'samoa': 'WST', 'kosovo': 'EUR', 'yemen': 'YER', 'mayotte': 'EUR', 'sudafrica': 'ZAR', 'zambia': 'ZMW', 'zimbabue': 'USD', 'republica checa': 'CZK', 'arabia saudita': 'SAR', 'afghanistan': 'AFN', 'norway': 'NOK', 'united states': 'USD', 'germany': 'EUR', 'united kingdom': 'GBP', 'russia': 'RUB', 'ukraine': 'UAH'}
+FX_CACHE = {}
+def fx_currency_for(country):
+    import unicodedata
+    key=''.join(c for c in unicodedata.normalize('NFKD',str(country or '').lower()) if not unicodedata.combining(c)).strip()
+    return FX_COUNTRY_CURRENCIES.get(key)
+
+@app.get('/api/demo-fiat-equivalent')
+def demo_fiat_equivalent():
+    user=current_user()
+    country=user['country'] if user else ''
+    currency=fx_currency_for(country)
+    if not currency:
+        return jsonify({'available':False,'reason':'Для выбранной страны пока нет справочного курса.'})
+    if currency=='USD':
+        return jsonify({'available':True,'currency':'USD','rate':1.0,'date':datetime.now(timezone.utc).date().isoformat(),'source':'USD reference','balance':round(float(user['demo_balance']),2) if user else guest_demo_state()[0]})
+    today=datetime.now(timezone.utc).date().isoformat()
+    cached=FX_CACHE.get(currency)
+    if cached and cached['checked']==today:
+        data=cached['data']
+    else:
+        data=None
+        # ECB publishes daily reference rates for a subset of currencies.
+        try:
+            raw=http_json('https://api.frankfurter.dev/v1/latest?base=USD&symbols='+urllib.parse.quote(currency),timeout=4)
+            rate=float(raw['rates'][currency])
+            if rate>0:data={'rate':rate,'date':raw['date'],'source':'ECB via Frankfurter'}
+        except Exception: pass
+        # Other currencies, e.g. AFN, are not in the ECB reference table.
+        # These are clearly labelled indicative third-party rates, not official central-bank quotes.
+        if data is None:
+            try:
+                raw=http_json('https://open.er-api.com/v6/latest/USD',timeout=4)
+                rate=float(raw['rates'][currency])
+                if rate>0:data={'rate':rate,'date':datetime.fromtimestamp(int(raw['time_last_update_unix']),timezone.utc).date().isoformat(),'source':'ExchangeRate-API (справочный курс, не официальный)'}
+            except Exception:pass
+        if data:FX_CACHE[currency]={'checked':today,'data':data}
+        elif cached:data=cached['data']
+    if not data:return jsonify({'available':False,'currency':currency,'reason':'Курс сейчас недоступен.'})
+    balance=round(float(user['demo_balance']),2) if user else guest_demo_state()[0]
+    return jsonify({'available':True,'currency':currency,'rate':data['rate'],'date':data['date'],'source':data['source'],'balance':balance,'stale':data['date']<today})
+
 init_db()
 
 if __name__ == '__main__':
