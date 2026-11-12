@@ -177,6 +177,30 @@ def init_db():
     conn.execute("""CREATE TABLE IF NOT EXISTS demo_bank_requests (id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL REFERENCES users(id),sender_bank TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'PENDING',created_at TEXT DEFAULT CURRENT_TIMESTAMP,notified_at TEXT)""")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_demo_bank_requests_user ON demo_bank_requests(user_id,status)")
     conn.execute("CREATE TABLE IF NOT EXISTS admin_audit (id INTEGER PRIMARY KEY AUTOINCREMENT, admin_id TEXT NOT NULL, user_id INTEGER, action TEXT NOT NULL, details TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)")
+    conn.execute("""CREATE TABLE IF NOT EXISTS demo_withdraw_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id),
+        amount_cents INTEGER NOT NULL,
+        currency TEXT NOT NULL,
+        network TEXT NOT NULL,
+        address TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','APPROVED','REJECTED')),
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        reviewed_at TEXT,
+        reviewed_by TEXT
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS demo_level_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id),
+        amount_cents INTEGER NOT NULL DEFAULT 12000,
+        status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','APPROVED','REJECTED')),
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        reviewed_at TEXT,
+        reviewed_by TEXT
+    )""")
+    cols={r['name'] for r in conn.execute('PRAGMA table_info(users)')}
+    if 'demo_level' not in cols:
+        conn.execute('ALTER TABLE users ADD COLUMN demo_level INTEGER NOT NULL DEFAULT 1')
     conn.commit(); conn.close()
 
 
@@ -715,6 +739,95 @@ def bot_status():
     state,user=bot_current()
     return jsonify({**bot_public(state),'authenticated':bool(user)})
 
+DEMO_WITHDRAW_COINS = {
+    'USDT': ('TRC20', 'ERC20'),
+    'BTC': ('Bitcoin',),
+    'ETH': ('ERC20',),
+    'USDC': ('ERC20',),
+    'SOL': ('Solana',),
+}
+
+@app.get('/api/demo-withdrawals')
+def demo_withdrawals():
+    state, user = bot_current()
+    if not user: return jsonify({'error':'Login required'}), 401
+    conn=db()
+    level=conn.execute('SELECT demo_level FROM users WHERE id=?',(user['id'],)).fetchone()['demo_level']
+    rows=conn.execute('SELECT id,amount_cents,currency,network,address,status,created_at FROM demo_withdraw_requests WHERE user_id=? ORDER BY id DESC LIMIT 30',(user['id'],)).fetchall()
+    level_request=conn.execute('SELECT id,status FROM demo_level_requests WHERE user_id=? ORDER BY id DESC LIMIT 1',(user['id'],)).fetchone()
+    conn.close()
+    return jsonify({'level':level,'limit':5 if level==1 else None,'available':round(state['balance'],2) if state.get('step')==7 else 0,'finished':state.get('step')==7,
+                    'requests':[dict(r) for r in rows],'level_request':dict(level_request) if level_request else None,
+                    'currencies':DEMO_WITHDRAW_COINS,'real_funds':False})
+
+@app.post('/api/demo-withdrawals')
+def request_demo_withdrawal():
+    state,user=bot_current()
+    if not user: return jsonify({'error':'Login required'}),401
+    if state.get('step')!=7: return jsonify({'error':'Дождитесь завершения DEMO-симуляции.'}),409
+    data=request.get_json(silent=True) or {}
+    currency=str(data.get('currency','')).upper().strip()
+    network=str(data.get('network','')).strip()
+    address=str(data.get('address','')).strip()
+    if currency not in DEMO_WITHDRAW_COINS or network not in DEMO_WITHDRAW_COINS[currency]:
+        return jsonify({'error':'Выберите поддерживаемую криптовалюту и сеть.'}),400
+    if len(address)<8 or len(address)>160 or any(c in address for c in '<>\n\r'):
+        return jsonify({'error':'Укажите корректный учебный адрес (8–160 символов).'}),400
+    try: amount_cents=round(float(data.get('amount',5))*100)
+    except (ValueError,TypeError): return jsonify({'error':'Неверная сумма.'}),400
+    conn=db()
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        level=conn.execute('SELECT demo_level FROM users WHERE id=?',(user['id'],)).fetchone()['demo_level']
+        pending=conn.execute("SELECT 1 FROM demo_withdraw_requests WHERE user_id=? AND status='PENDING'",(user['id'],)).fetchone()
+        used=conn.execute("SELECT COALESCE(SUM(amount_cents),0) FROM demo_withdraw_requests WHERE user_id=? AND status='APPROVED'",(user['id'],)).fetchone()[0]
+        if pending: raise ValueError('У вас уже есть заявка на проверке.')
+        if amount_cents<100 or (level==1 and amount_cents>500): raise ValueError('Лимит Level 1 — 5 DEMO USDT за заявку.')
+        if used+amount_cents>round(state['balance']*100): raise ValueError('Недостаточно доступных виртуальных средств.')
+        cur=conn.execute('INSERT INTO demo_withdraw_requests(user_id,amount_cents,currency,network,address) VALUES(?,?,?,?,?)',(user['id'],amount_cents,currency,network,address))
+        rid=cur.lastrowid;conn.commit()
+    except ValueError as exc:
+        conn.rollback();return jsonify({'error':str(exc)}),409
+    finally:conn.close()
+    for admin in TG_ADMIN_IDS:
+        telegram_send(admin,f'🧪 DEMO-вывод #{rid} (НЕ реальная выплата)\nПользователь: {user["public_id"]}\nEmail: {user["email"] or "—"}\nСтрана: {user["country"]}\nУровень: {level}\nСумма: {amount_cents/100:.2f} DEMO USDT\nВалюта: {currency}\nСеть: {network}\nАдрес: {address}',[[{'text':'✅ Одобрить DEMO','callback_data':f'wd:a:{rid}'},{'text':'❌ Отклонить','callback_data':f'wd:r:{rid}'}]])
+    return jsonify({'ok':True,'id':rid,'status':'PENDING','real_funds':False})
+
+@app.post('/api/demo-level-up')
+def request_demo_level_up():
+    state,user=bot_current()
+    if not user:return jsonify({'error':'Login required'}),401
+    conn=db()
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        level=conn.execute('SELECT demo_level FROM users WHERE id=?',(user['id'],)).fetchone()['demo_level']
+        if level>=2: raise ValueError('Уровень 2 уже активен.')
+        if conn.execute("SELECT 1 FROM demo_level_requests WHERE user_id=? AND status='PENDING'",(user['id'],)).fetchone(): raise ValueError('Заявка на уровень 2 уже рассматривается.')
+        rid=conn.execute('INSERT INTO demo_level_requests(user_id) VALUES(?)',(user['id'],)).lastrowid
+        conn.commit()
+    except ValueError as exc:
+        conn.rollback();return jsonify({'error':str(exc)}),409
+    finally:conn.close()
+    for admin in TG_ADMIN_IDS:
+        telegram_send(admin,f'⭐ DEMO Level 2 #{rid}\nПользователь: {user["public_id"]}\nEmail: {user["email"] or "—"}\nСтрана: {user["country"]}\nПри одобрении начислить 120 ВИРТУАЛЬНЫХ USDT и установить Level 2. Никакой реальной оплаты.',[[{'text':'✅ Одобрить DEMO','callback_data':f'lv:a:{rid}'},{'text':'❌ Отклонить','callback_data':f'lv:r:{rid}'}]])
+    return jsonify({'ok':True,'id':rid,'status':'PENDING','real_funds':False})
+
+def review_demo_payout(kind,rid,approve,actor):
+    table='demo_withdraw_requests' if kind=='wd' else 'demo_level_requests'
+    conn=db()
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        row=conn.execute(f'SELECT * FROM {table} WHERE id=?',(rid,)).fetchone()
+        if not row or row['status']!='PENDING':
+            conn.rollback();return 'Заявка уже обработана или не найдена.'
+        if approve and kind=='lv':
+            conn.execute('UPDATE users SET demo_level=2,demo_balance=demo_balance+120 WHERE id=?',(row['user_id'],))
+        conn.execute(f'UPDATE {table} SET status=?,reviewed_at=CURRENT_TIMESTAMP,reviewed_by=? WHERE id=?',('APPROVED' if approve else 'REJECTED',str(actor),rid))
+        admin_audit(conn,actor,'demo_'+kind+('_approve' if approve else '_reject'),row['user_id'],str(rid))
+        conn.commit()
+        return ('Одобрена' if approve else 'Отклонена')+f' DEMO-заявка #{rid}. Реальная выплата не производится.'
+    finally:conn.close()
+
 @app.post('/api/bot-demo/start')
 def bot_start():
     state,user=bot_current()
@@ -807,6 +920,12 @@ def admin_pending(actor):
     conn=db(); topups=conn.execute("SELECT t.*,u.public_id,u.country FROM demo_topup_requests t JOIN users u ON u.id=t.user_id WHERE t.status='PENDING' ORDER BY t.id DESC LIMIT 20").fetchall();conn.close()
     for t in topups:
         telegram_send(actor,f"🧪 Пополнение #{t['id']} · {t['public_id']} · {t['country']}\n{t['method_label']} · {t['amount_cents']/100:.2f} DEMO + {t['bonus_cents']/100:.2f} бонус",[[{'text':'✅ Зачислить DEMO','callback_data':f"topup:a:{t['id']}"},{'text':'❌ Отклонить','callback_data':f"topup:r:{t['id']}"}]])
+    conn=db()
+    for kind,table in [('wd','demo_withdraw_requests'),('lv','demo_level_requests')]:
+        pending_rows=conn.execute(f"SELECT t.*,u.public_id FROM {table} t JOIN users u ON u.id=t.user_id WHERE t.status='PENDING' ORDER BY t.id DESC LIMIT 20").fetchall()
+        for pr in pending_rows:
+            telegram_send(actor,f"🧪 {'Вывод' if kind=='wd' else 'Level 2'} #{pr['id']} · {pr['public_id']} · {pr['amount_cents']/100:.2f} DEMO",[[{'text':'✅ Одобрить DEMO','callback_data':f"{kind}:a:{pr['id']}"},{'text':'❌ Отклонить','callback_data':f"{kind}:r:{pr['id']}"}]])
+    conn.close()
     for r in rows:
         telegram_send(actor,f"#{r['id']} · {r['public_id']} · {r['country']} · {r['amount_cents']/100:.2f} DEMO USDT\nНикакой реальной оплаты не требуется.",[[{'text':'✅ Одобрить DEMO','callback_data':f"dep:a:{r['id']}"},{'text':'❌ Отклонить','callback_data':f"dep:r:{r['id']}"}]])
 
@@ -1020,6 +1139,9 @@ def telegram_webhook():
         if topup_match:
             result=review_topup_request(int(topup_match.group(2)),topup_match.group(1)=='a',actor)
             telegram_send(actor,result,admin_menu())
+        elif re.fullmatch(r'(wd|lv):[ar]:[0-9]{1,12}',payload):
+            kind,action,rid=payload.split(':')
+            telegram_send(actor,review_demo_payout(kind,int(rid),action=='a',actor),admin_menu())
         elif match:
             result=review_demo_request(int(match.group(2)),match.group(1)=='a',actor)
             telegram_send(actor,result,admin_menu())

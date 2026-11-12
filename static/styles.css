@@ -235,52 +235,16 @@ html,body{max-width:100%;overflow-x:hidden}
 .bottom-nav>.trade-action .trade-nav-icon{margin:0 auto!important;transform:none!important;position:static!important;flex-shrink:0!important}
 .bottom-nav>.trade-action span{margin-top:0!important}
 .bottom-nav>.nav-item small{text-align:center!important}
-
-/* V36 — adaptive desktop, tablet and mobile layout. Mobile V35 stays unchanged. */
-html,body{max-width:100%;overflow-x:hidden}
-.app-shell,.screen,.topbar,.topbar-actions{min-width:0}
-.topbar-actions{flex-shrink:1}
-@media (min-width: 768px){
-  body{padding:24px;display:block;background:radial-gradient(circle at 50% 0%,#12271e 0,#030806 65%)}
-  .app-shell{width:min(100%,1440px);max-width:1440px;margin:0 auto;min-height:calc(100vh - 48px);border:1px solid #1d4032;border-radius:28px;overflow:clip;padding-bottom:0}
-  .topbar{height:82px;padding:14px clamp(22px,3vw,44px)}
-  .topbar .brand{font-size:25px}
-  .topbar .brand-mark{width:42px;height:42px}
-  .ticker{padding:16px clamp(22px,3vw,44px);grid-template-columns:repeat(3,minmax(120px,180px)) 1fr;gap:18px}
-  .ticker small{font-size:11px}.ticker b{font-size:15px}.ticker .status{font-size:13px}
-  .activity-tape{max-width:100%}
-  .screen{width:100%;max-width:1240px;margin:0 auto;padding:32px clamp(24px,4vw,60px) 56px}
-  .screen h1{font-size:clamp(44px,5vw,68px)}
-  .screen h2{font-size:clamp(24px,2.3vw,34px)}
-  .screen .hero{padding:clamp(28px,4vw,55px)}
-  .screen .metrics,.screen .feature-grid,.screen .market-list{max-width:100%}
-  .screen .feature-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
-  .screen .market-list{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .screen .trade-panel,.screen .auth-card,.screen .wallet-card,.screen .about-card{padding:clamp(22px,2.4vw,34px)}
-  .screen .auth-card{max-width:660px;margin-left:auto;margin-right:auto}
-  .bottom-nav{position:sticky!important;bottom:0!important;width:100%!important;max-width:none!important;height:76px!important;margin:0 auto!important;border-radius:0 0 28px 28px!important;grid-template-columns:repeat(5,minmax(0,1fr))!important;padding-bottom:0!important}
-  .bottom-nav .nav-item small{font-size:12px!important}
-  .drawer{position:fixed;top:24px;right:max(24px,calc((100vw - 1440px)/2));width:min(420px,90vw);height:calc(100dvh - 48px);border-radius:24px;overflow:hidden;padding:24px}
-  .drawer-links{overflow-y:auto;min-height:0;flex:1;overscroll-behavior:contain}
-  .drawer-actions{flex-shrink:0;margin-top:12px}
-}
-@media (min-width: 1100px){
-  .screen .quote-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
-  .screen .feature-grid{gap:18px}
-  .screen .market-list{gap:16px}
-}
-@media (min-width: 768px) and (max-width: 1099px){
-  .screen .feature-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
-}
-@media (max-width: 767px){
-  .app-shell{max-width:430px}
-  .drawer{max-height:100dvh;overflow:hidden}
-  .drawer-links{overflow-y:auto;min-height:0;flex:1;overscroll-behavior:contain}
-  .drawer-actions{flex-shrink:0;margin-top:12px}
-}
-@media (max-width: 430px){
-  .topbar-v13{max-width:100%;gap:5px}
-  .topbar-v13 .topbar-actions{min-width:0;gap:5px}
-  .topbar-v13 .language-control{min-width:0}
-  .bottom-nav>.nav-item[data-route="trade"]{grid-column:3!important;grid-row:1!important;justify-self:center!important;transform:none!important}
-}
+/* V37: DEMO-only level and withdrawal panels */
+.demo-payout-card{margin-top:16px;max-width:100%;overflow:hidden}
+.demo-payout-card h2,.demo-payout-card h3{margin:0 0 12px}
+.demo-payout-status{padding:14px;border-radius:12px;background:rgba(37,198,133,.10);border:1px solid rgba(37,198,133,.22);margin:12px 0}
+.demo-payout-actions{display:grid;grid-template-columns:1fr;gap:10px;margin:14px 0}
+#demoPayoutForm,#demoLevelPanel{padding:14px 0;min-width:0}
+#demoPayoutForm label{display:block;margin:12px 0;font-size:13px;color:var(--muted,#a5b0bf)}
+#demoPayoutForm input,#demoPayoutForm select{display:block;width:100%;max-width:100%;min-width:0;box-sizing:border-box;margin-top:7px;padding:12px;border-radius:10px;border:1px solid rgba(148,163,184,.3);background:#111c2a;color:#fff}
+#demoPayoutNotice{font-size:13px;line-height:1.6;margin-top:12px;color:#94e7ba}
+.demo-wallet-history{margin:20px 0;max-width:100%;overflow:hidden}
+.demo-history-row{display:flex;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid rgba(148,163,184,.16)}
+.demo-history-row>div{min-width:0;display:grid;gap:4px}.demo-history-row>div:last-child{text-align:right;flex-shrink:0}
+.demo-history-row small{color:#a5b0bf;overflow-wrap:anywhere;font-size:11px}
