@@ -637,7 +637,8 @@ def close_trade(trade_id):
 
 # Scripted, clearly labelled demo. No market orders, real funds, or payouts.
 BOT_SEQUENCE = ['WIN','LOSS','WIN','LOSS','LOSS','WIN','WIN']
-BOT_PAIRS = ['BTC/USDT','ETH/USDT','SOL/USDT','BTC/USDT','ETH/USDT','SOL/USDT','BTC/USDT']
+BOT_PAIRS = ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','BNB/USDT','ADA/USDT','LINK/USDT']
+BOT_PAIR_POOL = ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','BNB/USDT','ADA/USDT','LINK/USDT','AVAX/USDT','DOGE/USDT','LTC/USDT','TRX/USDT','TON/USDT']
 BOT_SIDES = ['LONG','SHORT','LONG','SHORT','LONG','LONG','SHORT']
 # Legacy schedule is retained only for demos started before this update.
 BOT_CHANGES = [775.0,-50.0,775.0,-50.0,-50.0,775.0,775.0]
@@ -672,8 +673,8 @@ def bot_random_changes():
     return result
 BOT_START = 50.0
 BOT_TARGET = 3000.0
-BOT_DURATION = 3 * 3600 + 30 * 60
-BOT_CLOSE_MINUTES = (5, 15, 35, 65, 105, 155, 210)
+BOT_DURATION = 2 * 3600
+BOT_CLOSE_MINUTES = (5, 15, 30, 50, 70, 95, 120)
 def bot_offset(index):
     return 60 * (0 if index == 0 else BOT_CLOSE_MINUTES[index-1])
 
@@ -702,7 +703,7 @@ def bot_advance(state):
     try: start=datetime.fromisoformat(state['started_at'])
     except (TypeError,ValueError): return False
     elapsed=max(0,(now-start).total_seconds())
-    # Seven settlements at equal intervals, ending at 3h30m.
+    # Seven settlements at equal intervals, ending at 2h.
     due=sum(elapsed >= minute*60 for minute in BOT_CLOSE_MINUTES)
     changed=False
     while state['step'] < due:
@@ -710,7 +711,7 @@ def bot_advance(state):
         state['balance']=round(state['balance']+change,2)
         state['step']=i+1
         at=(start+timedelta(seconds=BOT_CLOSE_MINUTES[i]*60)).isoformat()
-        state['history'].append({'number':i+1,'result':BOT_SEQUENCE[i],'pnl':change,'balance':state['balance'],'at':at,'opened_at':(start+timedelta(seconds=bot_offset(i))).isoformat(),'mode':'SIMULATED','pair':BOT_PAIRS[i],'side':BOT_SIDES[i]})
+        state['history'].append({'number':i+1,'result':BOT_SEQUENCE[i],'pnl':change,'balance':state['balance'],'at':at,'opened_at':(start+timedelta(seconds=bot_offset(i))).isoformat(),'mode':'SIMULATED','pair':state.get('pairs',BOT_PAIRS)[i],'side':BOT_SIDES[i]})
         changed=True
     if state['step']==7:
         state['active']=False; state['finished_at']=(start+timedelta(seconds=BOT_DURATION)).isoformat(); changed=True
@@ -727,7 +728,7 @@ def bot_public(state):
     if state.get('active') and state.get('started_at') and state.get('step',0) < 7:
         i = state['step']
         start = datetime.fromisoformat(state['started_at'])
-        position = {'pair':BOT_PAIRS[i], 'side':BOT_SIDES[i], 'number':i+1,
+        position = {'pair':state.get('pairs',BOT_PAIRS)[i], 'side':BOT_SIDES[i], 'number':i+1,
                     'opened_at':(start+timedelta(seconds=bot_offset(i))).isoformat(),
                     'closes_at':(start+timedelta(seconds=BOT_CLOSE_MINUTES[i]*60)).isoformat(),
                     'status':'SIMULATED_OPEN'}
@@ -737,7 +738,7 @@ def bot_public(state):
 @app.get('/api/bot-demo')
 def bot_status():
     state,user=bot_current()
-    return jsonify({**bot_public(state),'authenticated':bool(user)})
+    return jsonify({**bot_public(state),'authenticated':bool(user),'wallet_balance':round(float(user['demo_balance']),2) if user else 0})
 
 DEMO_WITHDRAW_COINS = {
     'USDT': ('TRC20', 'ERC20'),
@@ -828,6 +829,29 @@ def review_demo_payout(kind,rid,approve,actor):
         return ('Одобрена' if approve else 'Отклонена')+f' DEMO-заявка #{rid}. Реальная выплата не производится.'
     finally:conn.close()
 
+@app.post('/api/bot-demo/activate-wallet')
+def bot_activate_wallet():
+    """One-time, atomic virtual-wallet debit for demo bot access."""
+    user=current_user()
+    if not user: return jsonify({'error':'Для активации войдите в аккаунт.'}),401
+    conn=db()
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        row=conn.execute('SELECT state_json FROM bot_demo WHERE user_id=?',(user['id'],)).fetchone()
+        state=json.loads(row['state_json']) if row else bot_default()
+        if state.get('funded') or state.get('active') or state.get('step'):
+            conn.rollback(); return jsonify({'error':'AI Bot уже активирован.'}),409
+        updated=conn.execute('UPDATE users SET demo_balance=ROUND(demo_balance-50,2) WHERE id=? AND demo_balance>=50',(user['id'],))
+        if updated.rowcount!=1:
+            conn.rollback(); return jsonify({'error':'Недостаточно виртуальных USDT. Пополните DEMO-кошелёк.'}),409
+        state['funded']=True
+        conn.execute('INSERT INTO bot_demo(user_id,state_json) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET state_json=excluded.state_json,updated_at=CURRENT_TIMESTAMP',(user['id'],json.dumps(state)))
+        admin_audit(conn,'user','bot_wallet_activation',user['id'],'50 DEMO USDT deducted from virtual wallet')
+        balance=conn.execute('SELECT demo_balance FROM users WHERE id=?',(user['id'],)).fetchone()['demo_balance']
+        conn.commit()
+        return jsonify({**bot_public(state),'wallet_balance':round(float(balance),2)})
+    finally: conn.close()
+
 @app.post('/api/bot-demo/start')
 def bot_start():
     state,user=bot_current()
@@ -836,6 +860,7 @@ def bot_start():
     if state['active'] or state['step']:
         return jsonify({'error':'Demo already started; reset to replay.'}),409
     state['changes']=bot_random_changes()
+    state['pairs']=secrets.SystemRandom().sample(BOT_PAIR_POOL,7)
     state['active']=True; state['started_at']=datetime.now(timezone.utc).isoformat()
     bot_save(state,user)
     return jsonify(bot_public(state))
@@ -849,7 +874,10 @@ def bot_reset():
     state,user=bot_current()
     if not user: return jsonify({'error':'Login required'}),401
     if state['active']: return jsonify({'error':'Wait for the demo to finish before resetting.'}),409
-    state=bot_default(); bot_save(state,user)
+    funded=bool(state.get('funded'))
+    archive=list(state.get('history_archive') or [])
+    archive.extend(state.get('history') or [])
+    state=bot_default(); state['funded']=funded; state['history_archive']=archive[-1000:]; bot_save(state,user)
     return jsonify(bot_public(state))
 
 # Telegram administrator (DEMO ONLY). No payment receipts, real funds, or crypto custody.
@@ -906,6 +934,8 @@ def review_topup_request(request_id, approve, admin_id):
                 state_row=conn.execute('SELECT state_json FROM bot_demo WHERE user_id=?',(r['user_id'],)).fetchone()
                 state=json.loads(state_row['state_json']) if state_row else bot_default()
                 if not state.get('funded'):
+                    debit=conn.execute('UPDATE users SET demo_balance=ROUND(demo_balance-50,2) WHERE id=? AND demo_balance>=50',(r['user_id'],))
+                    if debit.rowcount!=1: raise ValueError('Недостаточно DEMO-средств для активации')
                     state['funded']=True
                     conn.execute('INSERT INTO bot_demo(user_id,state_json) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET state_json=excluded.state_json,updated_at=CURRENT_TIMESTAMP',(r['user_id'],json.dumps(state)))
         conn.execute('UPDATE demo_topup_requests SET status=?,reviewed_at=CURRENT_TIMESTAMP,reviewed_by=? WHERE id=?',('APPROVED' if approve else 'REJECTED',str(admin_id),request_id))

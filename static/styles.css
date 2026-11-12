@@ -248,3 +248,21 @@ html,body{max-width:100%;overflow-x:hidden}
 .demo-history-row{display:flex;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid rgba(148,163,184,.16)}
 .demo-history-row>div{min-width:0;display:grid;gap:4px}.demo-history-row>div:last-child{text-align:right;flex-shrink:0}
 .demo-history-row small{color:#a5b0bf;overflow-wrap:anywhere;font-size:11px}
+
+/* V38: Mobile-first demo bot preparation sequence */
+.bot-preparation{margin:14px 0;padding:16px;border:1px solid rgba(109,153,238,.3);border-radius:16px;background:rgba(25,45,78,.55);color:#e9f2ff}
+.bot-preparation[hidden]{display:none!important}
+.bot-preparation-heading{display:flex;align-items:center;gap:10px;font-size:15px}
+.bot-preparation p{font-size:13px;line-height:1.5;margin:12px 0;color:#c7d6eb}
+.bot-preparation small{display:block;font-size:11px;line-height:1.5;color:#9eb0c9;margin-top:9px}
+.bot-preparation-track{height:6px;border-radius:8px;background:rgba(255,255,255,.12);overflow:hidden}
+.bot-preparation-track span{display:block;height:100%;width:0;background:#68a5ff;border-radius:8px;transition:width .5s ease}
+.bot-preparation-spinner{width:16px;height:16px;border:2px solid rgba(255,255,255,.2);border-top-color:#8dbdff;border-radius:50%;animation:botPrepSpin .8s linear infinite;flex-shrink:0}
+@keyframes botPrepSpin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.bot-preparation-spinner{animation:none}.bot-preparation-track span{transition:none}}
+
+/* V40: separate persistent manual and bot demo trade histories */
+.orbitra-history-tabs{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;margin:16px 0}
+.orbitra-history-tab{border:1px solid rgba(145,165,188,.25);background:rgba(145,165,188,.08);color:inherit;border-radius:12px;padding:12px 8px;font:inherit;font-size:13px;font-weight:700;cursor:pointer;min-width:0}
+.orbitra-history-tab.active{background:#2467db;color:#fff;border-color:#2467db}
+#walletBotHistory[hidden],#tradeHistory[hidden]{display:none!important}
