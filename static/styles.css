@@ -273,3 +273,6 @@ html,body{max-width:100%;overflow-x:hidden}
 .wallet-local-fiat small{display:block;color:#86a99c;font-size:10px;margin-top:3px}
 .drawer-links .drawer-bot-feature{border:1px solid rgba(95,244,155,.45)!important;background:linear-gradient(115deg,rgba(28,109,77,.44),rgba(10,38,29,.65))!important;border-radius:12px!important;margin:8px 0!important;padding:13px 10px!important;box-shadow:0 0 0 1px rgba(93,237,145,.08),0 0 20px rgba(39,184,108,.12)}
 .drawer-new-badge{display:inline-block;vertical-align:middle;margin-left:5px;background:#75f2a1;color:#06291a;border-radius:5px;padding:3px 5px;font-size:9px;letter-spacing:.4px;font-weight:900;white-space:nowrap}
+
+/* V45: responsive interval selector and visible bot-loading state */
+.intervals{display:flex;flex-wrap:wrap;gap:5px;min-width:0}.intervals button{flex:0 0 auto;min-width:36px}.bot-loading-card{border:1px solid #2f7154;background:#102a20;border-radius:15px;padding:18px;margin:20px 0;color:#d2f8e0;line-height:1.7}.bot-loading-card[hidden]{display:none!important}.bot-loading-card button{margin-top:12px}

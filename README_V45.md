@@ -1,0 +1,1 @@
+Orbitra V45: password form moved from Profile to Security. Trading chart selector: 10s (1-minute candles refreshed every 10 seconds), 1m, 5m, 15m, 1h, 4h, 1d. Fixes bot_public NameError for active sessions and adds bot loading error/retry. Demo only.

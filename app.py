@@ -492,9 +492,10 @@ def account_api():
 @app.get('/api/market/<symbol>/candles')
 def candles_api(symbol):
     symbol=symbol.upper(); interval=request.args.get('interval','1m')
-    if symbol not in MARKETS or interval not in ALLOWED_INTERVALS: return jsonify({'error':'unsupported market'}),400
+    if symbol not in MARKETS or interval not in ALLOWED_INTERVALS and interval != '10s': return jsonify({'error':'unsupported market'}),400
     try:
-        candles, source=fetch_candles(symbol,interval)
+        candles, source=fetch_candles(symbol,'1m' if interval=='10s' else interval)
+        if interval=='10s': source += ' · 1m candles (10s refresh)';
         return jsonify({'symbol':symbol,'interval':interval,'source':source,'candles':candles})
     except Exception as e:
         return jsonify({'error':'market data unavailable','detail':str(e)}),503
@@ -698,7 +699,7 @@ def bot_advance(state):
         state['balance']=round(state['balance']+change,2)
         state['step']=i+1
         at=(start+timedelta(seconds=minutes[i]*60)).isoformat()
-        state['history'].append({'number':i+1,'result':BOT_SEQUENCE[i],'pnl':change,'balance':state['balance'],'at':at,'opened_at':(start+timedelta(seconds=60*(0 if i==0 else minutes[i-1]))).isoformat(),'mode':'SIMULATED','pair':state.get('pairs',BOT_PAIRS)[i],'side':BOT_SIDES[i]})
+        state['history'].append({'number':i+1,'result':BOT_SEQUENCE[i],'pnl':change,'balance':state['balance'],'at':at,'opened_at':(start+timedelta(seconds=60*(0 if i==0 else bot_minutes(state)[i-1]))).isoformat(),'mode':'SIMULATED','pair':state.get('pairs',BOT_PAIRS)[i],'side':BOT_SIDES[i]})
         changed=True
     if state['step']==len(minutes):
         state['active']=False; state['finished_at']=(start+timedelta(seconds=BOT_DURATION)).isoformat(); changed=True
@@ -716,7 +717,7 @@ def bot_public(state):
         i = state['step']
         start = datetime.fromisoformat(state['started_at'])
         position = {'pair':state.get('pairs',BOT_PAIRS)[i], 'side':BOT_SIDES[i], 'number':i+1,
-                    'opened_at':(start+timedelta(seconds=60*(0 if i==0 else minutes[i-1]))).isoformat(),
+                    'opened_at':(start+timedelta(seconds=60*(0 if i==0 else bot_minutes(state)[i-1]))).isoformat(),
                     'closes_at':(start+timedelta(seconds=bot_minutes(state)[i]*60)).isoformat(),
                     'status':'SIMULATED_OPEN'}
     return {**{k:v for k,v in state.items() if k not in ('changes','withdrawals')},'mode':'SCRIPTED_DEMO','initial_capital':BOT_START,'target':BOT_TARGET,'duration_seconds':BOT_DURATION,'total_trades':len(bot_minutes(state)),'real_funds':False,'position':position}
@@ -965,7 +966,7 @@ def admin_geo(actor):
     lines += [f"{r['country']} · {r['method']} · {r['label']}" for r in rows]
     telegram_send(actor,'\n'.join(lines),admin_menu())
 
-CRYPTO_DEFAULTS = [('USDT','TRC20'),('USDT','ERC20'),('USDT','BEP20'),('USDT','SOLANA'),('USDT','TON'),('BTC','BITCOIN'),('ETH','ERC20'),('USDC','ERC20'),('SOL','SOLANA')]
+CRYPTO_DEFAULTS = [('USDT','TRC20'),('USDT','ERC20'),('USDT','BEP20'),('USDT','SOLANA'),('USDT','TON'),('USDT','POLYGON'),('BTC','BITCOIN'),('ETH','ERC20'),('USDC','ERC20'),('SOL','SOLANA')]
 
 def admin_crypto(actor):
     conn=db()
@@ -1177,7 +1178,7 @@ def telegram_webhook():
         elif payload=='menu:stats': admin_stats(actor)
         elif payload=='menu:geo': admin_geo(actor)
         elif payload=='menu:crypto': admin_crypto(actor)
-        elif re.fullmatch(r'cedit:([A-Z0-9]+:[A-Z0-9]+)',payload) and tuple(payload[6:].split(':')) in CRYPTO_DEFAULTS:
+        elif re.fullmatch(r'cedit:(USDT:(?:TRC20|ERC20|BEP20|SOLANA|TON|POLYGON)|BTC:BITCOIN|ETH:ERC20|USDC:ERC20|SOL:SOLANA)',payload):
             cur,network=payload.split(':')[1:]
             telegram_send(actor,f'✏️ {cur} · {network}\nДля замены только DEMO-адреса отправьте:\n/address {cur} {network} | Тестовый адрес: SAMPLE-ONLY\n\nНе указывайте действующий кошелёк.',admin_menu())
         elif re.fullmatch(r'user:[0-9]+',payload): admin_profile(actor,int(payload.split(':')[1]))
@@ -1199,7 +1200,7 @@ def telegram_webhook():
                 conn=db();conn.execute('INSERT INTO geo_demo_methods(country,method,label,details) VALUES(?,?,?,?) ON CONFLICT(country,method) DO UPDATE SET label=excluded.label,details=excluded.details,enabled=1',('ALL',key,m.group(3).strip(),m.group(4).strip()));admin_audit(conn,actor,'global_crypto_set',None,key);conn.commit();conn.close()
                 telegram_send(actor,'🪙 DEMO-криптовалюта сохранена для всех стран: '+key,admin_menu())
         elif cmd=='/address':
-            m=re.fullmatch(r'/address\s+([A-Z0-9]+)\s+([A-Z0-9]+)\s*\|\s*(.{1,240})',text,re.S|re.I)
+            m=re.fullmatch(r'/address\s+(USDT|BTC|ETH|USDC|SOL)\s+(TRC20|BITCOIN|ERC20|BEP20|SOLANA|TON|POLYGON)\s*\|\s*(.{1,240})',text,re.S|re.I)
             if not m or (m.group(1).upper(),m.group(2).upper()) not in CRYPTO_DEFAULTS:
                 telegram_send(actor,'Выберите криптовалюту кнопкой в разделе 🪙 Криптовалюты.',admin_menu())
             elif not any(x in m.group(3).lower() for x in ('тест', 'demo', 'sample')):
