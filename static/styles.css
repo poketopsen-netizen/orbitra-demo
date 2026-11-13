@@ -276,3 +276,10 @@ html,body{max-width:100%;overflow-x:hidden}
 
 /* V45: responsive interval selector and visible bot-loading state */
 .intervals{display:flex;flex-wrap:wrap;gap:5px;min-width:0}.intervals button{flex:0 0 auto;min-width:36px}.bot-loading-card{border:1px solid #2f7154;background:#102a20;border-radius:15px;padding:18px;margin:20px 0;color:#d2f8e0;line-height:1.7}.bot-loading-card[hidden]{display:none!important}.bot-loading-card button{margin-top:12px}
+
+/* V46: compact ticker, accessible duration selector */
+.ticker{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.ticker>div{min-width:0}
+.duration-row select{background:#071b16;color:#e9fff6;border:1px solid #285646;border-radius:10px;padding:10px 12px;font:inherit;font-weight:700;max-width:55%;cursor:pointer}
+.duration-row select:focus-visible{outline:2px solid #6bf3a4;outline-offset:2px}
+.trade-clock .countdown-ring{font-size:12px;white-space:nowrap;min-width:58px}

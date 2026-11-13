@@ -1,0 +1,1 @@
+Orbitra V46: corrected Russian DEMO balance labels and wallet stats translations, moved password form above security information, changed ticker to markets + active status, and added real server-side trade durations (10s, 1m, 5m, 15m, 1h, 4h, 1d). Existing trades default to 10 seconds. DEMO only.

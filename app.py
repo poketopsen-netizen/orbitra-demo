@@ -21,6 +21,7 @@ app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
 app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=os.environ.get('RENDER', '').lower() == 'true')
 TRADE_DURATION_SECONDS = 10
+ALLOWED_TRADE_DURATIONS = {10, 60, 300, 900, 3600, 14400, 86400}
 MARKET_CACHE = {}
 
 COUNTRIES_ES = [
@@ -132,6 +133,9 @@ def init_db():
         closed_at DATETIME,
         FOREIGN KEY(user_id) REFERENCES users(id)
     )''')
+    trade_cols = {r['name'] for r in conn.execute('PRAGMA table_info(demo_trades)').fetchall()}
+    if 'duration_seconds' not in trade_cols:
+        conn.execute('ALTER TABLE demo_trades ADD COLUMN duration_seconds INTEGER NOT NULL DEFAULT 10')
     cols = {r['name'] for r in conn.execute('PRAGMA table_info(users)').fetchall()}
     for col, definition in [('public_id','TEXT'),('first_name','TEXT'),('last_name','TEXT'),('country','TEXT'),('demo_balance','REAL NOT NULL DEFAULT 1000'),('password_hash','TEXT'),('email','TEXT')]:
         if col not in cols:
@@ -293,9 +297,9 @@ def parse_utc(value):
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
 
-def seconds_left(opened_at):
+def seconds_left(opened_at, duration_seconds=TRADE_DURATION_SECONDS):
     elapsed = (datetime.now(timezone.utc) - parse_utc(opened_at)).total_seconds()
-    return max(0.0, TRADE_DURATION_SECONDS - elapsed)
+    return max(0.0, int(duration_seconds or TRADE_DURATION_SECONDS) - elapsed)
 
 DEMO_PAYOUT_RATE = 1.0
 
@@ -514,7 +518,7 @@ def list_trades():
         conn=db(); rows=conn.execute('SELECT * FROM demo_trades WHERE user_id=? ORDER BY id DESC',(user['id'],)).fetchall(); raw=[dict(r) for r in rows]
         # Automatically settle every 10-second trade once its timer expires.
         for r in raw:
-            if r['status']=='OPEN' and seconds_left(r.get('opened_at')) <= 0:
+            if r['status']=='OPEN' and seconds_left(r.get('opened_at'), r.get('duration_seconds', TRADE_DURATION_SECONDS)) <= 0:
                 try: price=fetch_ticker(r['symbol'])['price']
                 except Exception: continue  # Retry settlement when the price feed returns.
                 result=training_result(r,price)
@@ -530,7 +534,7 @@ def list_trades():
         balance, raw = guest_demo_state()
         changed=False
         for r in raw:
-            if r['status']=='OPEN' and seconds_left(r.get('opened_at')) <= 0:
+            if r['status']=='OPEN' and seconds_left(r.get('opened_at'), r.get('duration_seconds', TRADE_DURATION_SECONDS)) <= 0:
                 try: price=fetch_ticker(r['symbol'])['price']
                 except Exception: continue  # Retry settlement when the price feed returns.
                 result=training_result(r,price)
@@ -549,7 +553,7 @@ def list_trades():
                 current=prices[r['symbol']]
             except Exception: current=None
         live_result=training_result(r,current) if current is not None else None
-        out.append({'id':r['id'],'symbol':r['symbol'],'side':r['side'],'quantity':r['quantity'],'stake':live_result['stake'],'entry_price':r['entry_price'],'current_price':current,'market_direction':live_result['market_direction'] if live_result else 'UNKNOWN','projected_result':live_result['result'] if live_result else 'PENDING','projected_profit':live_result['profit'] if live_result else None,'status':r['status'],'opened_at':r.get('opened_at'),'closed_at':r.get('closed_at'),'seconds_left':seconds_left(r.get('opened_at')) if r['status']=='OPEN' else 0})
+        out.append({'id':r['id'],'symbol':r['symbol'],'side':r['side'],'quantity':r['quantity'],'stake':live_result['stake'],'entry_price':r['entry_price'],'current_price':current,'market_direction':live_result['market_direction'] if live_result else 'UNKNOWN','projected_result':live_result['result'] if live_result else 'PENDING','projected_profit':live_result['profit'] if live_result else None,'status':r['status'],'opened_at':r.get('opened_at'),'closed_at':r.get('closed_at'),'duration_seconds':r.get('duration_seconds', TRADE_DURATION_SECONDS),'seconds_left':seconds_left(r.get('opened_at'), r.get('duration_seconds', TRADE_DURATION_SECONDS)) if r['status']=='OPEN' else 0})
     closed=[t for t in out if t['status']=='CLOSED']
     summary={'total':len(closed),'wins':sum(t['projected_result']=='WIN' for t in closed),'losses':sum(t['projected_result']=='LOSS' for t in closed),'open':sum(t['status']=='OPEN' for t in out),'net_profit':round(sum(float(t['projected_profit'] or 0) for t in closed),2)}
     return jsonify({'balance':balance,'trades':out,'summary':summary,'authenticated':bool(user),'auto_closed':auto_closed,'duration_seconds':TRADE_DURATION_SECONDS})
@@ -558,6 +562,9 @@ def list_trades():
 def open_trade():
     user=current_user()
     data=request.get_json(silent=True) or {}; symbol=str(data.get('symbol','')).upper(); side=str(data.get('side','')).upper()
+    try: duration_seconds=int(data.get('duration_seconds', TRADE_DURATION_SECONDS))
+    except (ValueError,TypeError): duration_seconds=0
+    if duration_seconds not in ALLOWED_TRADE_DURATIONS: return jsonify({'error':'invalid trade duration'}),400
     try: amount=float(data.get('amount',0))
     except Exception: amount=0
     if symbol not in MARKETS or side not in {'BUY','SELL'} or not math.isfinite(amount) or amount<=0: return jsonify({'error':'invalid order'}),400
@@ -574,12 +581,12 @@ def open_trade():
         if amount>latest_balance:
             conn.rollback(); conn.close(); return jsonify({'error':'insufficient demo balance','max_notional':latest_balance}),400
         new_balance=latest_balance-amount
-        cur=conn.execute('INSERT INTO demo_trades(user_id,symbol,side,quantity,entry_price,opened_at) VALUES(?,?,?,?,?,?)',(user['id'],symbol,side,quantity,price,opened.isoformat())); conn.execute('UPDATE users SET demo_balance=? WHERE id=?',(new_balance,user['id'])); conn.commit(); conn.close(); trade_id=cur.lastrowid
+        cur=conn.execute('INSERT INTO demo_trades(user_id,symbol,side,quantity,entry_price,opened_at,duration_seconds) VALUES(?,?,?,?,?,?,?)',(user['id'],symbol,side,quantity,price,opened.isoformat(),duration_seconds)); conn.execute('UPDATE users SET demo_balance=? WHERE id=?',(new_balance,user['id'])); conn.commit(); conn.close(); trade_id=cur.lastrowid
     else:
         balance, trades=guest_demo_state(); trade_id=(max([int(t['id']) for t in trades], default=0)+1)
-        trades.append({'id':trade_id,'symbol':symbol,'side':side,'quantity':quantity,'entry_price':price,'exit_price':None,'status':'OPEN','opened_at':opened.isoformat(),'closed_at':None})
+        trades.append({'id':trade_id,'symbol':symbol,'side':side,'quantity':quantity,'entry_price':price,'exit_price':None,'status':'OPEN','opened_at':opened.isoformat(),'closed_at':None,'duration_seconds':duration_seconds})
         save_guest_demo(new_balance,trades)
-    return jsonify({'ok':True,'trade_id':trade_id,'entry_price':price,'quantity':quantity,'stake':amount,'balance':new_balance,'authenticated':bool(user),'duration_seconds':TRADE_DURATION_SECONDS,'expires_at':(opened+timedelta(seconds=TRADE_DURATION_SECONDS)).isoformat()})
+    return jsonify({'ok':True,'trade_id':trade_id,'entry_price':price,'quantity':quantity,'stake':amount,'balance':new_balance,'authenticated':bool(user),'duration_seconds':duration_seconds,'expires_at':(opened+timedelta(seconds=duration_seconds)).isoformat()})
 
 
 @app.post('/api/demo/refill')
