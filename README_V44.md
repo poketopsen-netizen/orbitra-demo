@@ -1,0 +1,1 @@
+Orbitra V44: i18n badge NEW, top MODE/MARKETS/TRADES labels and REAL BALANCE; local TON icon; DEMO USDT network variants TRC20, ERC20, BEP20, SOLANA, TON. Every payment method is demo only; unconfigured methods show non-wallet placeholders. Telegram admin can configure separate sample-only addresses for each network.

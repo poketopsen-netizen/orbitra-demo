@@ -965,7 +965,7 @@ def admin_geo(actor):
     lines += [f"{r['country']} · {r['method']} · {r['label']}" for r in rows]
     telegram_send(actor,'\n'.join(lines),admin_menu())
 
-CRYPTO_DEFAULTS = [('USDT','TRC20'),('BTC','BITCOIN'),('ETH','ERC20'),('USDC','ERC20'),('SOL','SOLANA')]
+CRYPTO_DEFAULTS = [('USDT','TRC20'),('USDT','ERC20'),('USDT','BEP20'),('USDT','SOLANA'),('USDT','TON'),('BTC','BITCOIN'),('ETH','ERC20'),('USDC','ERC20'),('SOL','SOLANA')]
 
 def admin_crypto(actor):
     conn=db()
@@ -1177,7 +1177,7 @@ def telegram_webhook():
         elif payload=='menu:stats': admin_stats(actor)
         elif payload=='menu:geo': admin_geo(actor)
         elif payload=='menu:crypto': admin_crypto(actor)
-        elif re.fullmatch(r'cedit:(USDT:TRC20|BTC:BITCOIN|ETH:ERC20|USDC:ERC20|SOL:SOLANA)',payload):
+        elif re.fullmatch(r'cedit:([A-Z0-9]+:[A-Z0-9]+)',payload) and tuple(payload[6:].split(':')) in CRYPTO_DEFAULTS:
             cur,network=payload.split(':')[1:]
             telegram_send(actor,f'✏️ {cur} · {network}\nДля замены только DEMO-адреса отправьте:\n/address {cur} {network} | Тестовый адрес: SAMPLE-ONLY\n\nНе указывайте действующий кошелёк.',admin_menu())
         elif re.fullmatch(r'user:[0-9]+',payload): admin_profile(actor,int(payload.split(':')[1]))
@@ -1199,7 +1199,7 @@ def telegram_webhook():
                 conn=db();conn.execute('INSERT INTO geo_demo_methods(country,method,label,details) VALUES(?,?,?,?) ON CONFLICT(country,method) DO UPDATE SET label=excluded.label,details=excluded.details,enabled=1',('ALL',key,m.group(3).strip(),m.group(4).strip()));admin_audit(conn,actor,'global_crypto_set',None,key);conn.commit();conn.close()
                 telegram_send(actor,'🪙 DEMO-криптовалюта сохранена для всех стран: '+key,admin_menu())
         elif cmd=='/address':
-            m=re.fullmatch(r'/address\s+(USDT|BTC|ETH|USDC|SOL)\s+(TRC20|BITCOIN|ERC20|SOLANA)\s*\|\s*(.{1,240})',text,re.S|re.I)
+            m=re.fullmatch(r'/address\s+([A-Z0-9]+)\s+([A-Z0-9]+)\s*\|\s*(.{1,240})',text,re.S|re.I)
             if not m or (m.group(1).upper(),m.group(2).upper()) not in CRYPTO_DEFAULTS:
                 telegram_send(actor,'Выберите криптовалюту кнопкой в разделе 🪙 Криптовалюты.',admin_menu())
             elif not any(x in m.group(3).lower() for x in ('тест', 'demo', 'sample')):
