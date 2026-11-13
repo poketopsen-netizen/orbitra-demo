@@ -636,45 +636,27 @@ def close_trade(trade_id):
 
 
 # Scripted, clearly labelled demo. No market orders, real funds, or payouts.
-BOT_SEQUENCE = ['WIN','LOSS','WIN','LOSS','LOSS','WIN','WIN']
-BOT_PAIRS = ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','BNB/USDT','ADA/USDT','LINK/USDT']
+BOT_SEQUENCE = ['WIN','LOSS','WIN','WIN','LOSS','WIN','LOSS','WIN','LOSS','WIN']
+BOT_PAIRS = ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','BNB/USDT','ADA/USDT','LINK/USDT','AVAX/USDT','DOGE/USDT','LTC/USDT']
 BOT_PAIR_POOL = ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','BNB/USDT','ADA/USDT','LINK/USDT','AVAX/USDT','DOGE/USDT','LTC/USDT','TRX/USDT','TON/USDT']
-BOT_SIDES = ['LONG','SHORT','LONG','SHORT','LONG','LONG','SHORT']
-# Legacy schedule is retained only for demos started before this update.
-BOT_CHANGES = [775.0,-50.0,775.0,-50.0,-50.0,775.0,775.0]
-
-def bot_random_changes():
-    """Generate a varied, precomputed SIMULATED ledger, never market returns.
-
-    Seven entries, fixed win/loss order, exact 3000 USDT final demo balance.
-    The random ledger is stored once at start so refreshes cannot reroll it.
-    """
-    rng = secrets.SystemRandom()
-    losses = [rng.randrange(65, 151), rng.randrange(75, 171), rng.randrange(85, 191)]
-    # All losses are visibly different, with larger drawdowns than V18.
-    while len(set(losses)) != 3:
-        losses = [rng.randrange(65, 151), rng.randrange(75, 171), rng.randrange(85, 191)]
-    total_wins = int(BOT_TARGET - BOT_START + sum(losses))
-    # Keep early wins sufficient to fund later losses without negative balance.
-    while True:
-        w1 = rng.randrange(370, 651)
-        w2 = rng.randrange(480, 851)
-        w3 = rng.randrange(550, 1051)
-        w4 = total_wins - w1 - w2 - w3
-        wins = [w1, w2, w3, w4]
-        if w4 >= 350 and len(set(wins)) == 4 and all(w not in losses for w in wins):
-            break
-    result = [w1, -losses[0], w2, -losses[1], -losses[2], w3, w4]
-    assert sum(result) == int(BOT_TARGET - BOT_START)
-    running = BOT_START
-    for change in result:
-        running += change
-        assert running >= 0
-    return result
+BOT_SIDES = ['LONG','SHORT','LONG','SHORT','LONG','LONG','SHORT','LONG','SHORT','LONG']
 BOT_START = 50.0
-BOT_TARGET = 3000.0
+BOT_TARGET = 2785.0
 BOT_DURATION = 2 * 3600
-BOT_CLOSE_MINUTES = (5, 15, 30, 50, 70, 95, 120)
+BOT_CLOSE_MINUTES = (5, 13, 24, 36, 49, 63, 76, 90, 105, 120)
+BOT_CHANGES = [450,-50,420,460,-65,480,-80,520,-100,700]
+def bot_random_changes():
+    """10 artificial settlements; exact final demo balance 2785, not market-derived."""
+    rng=secrets.SystemRandom()
+    losses=[rng.randrange(35,95) for _ in range(4)]
+    total=int(BOT_TARGET-BOT_START+sum(losses))
+    wins=[rng.randrange(350,480),rng.randrange(370,490),rng.randrange(400,520),rng.randrange(420,540),rng.randrange(440,560)]
+    wins.append(total-sum(wins))
+    result=[wins[0],-losses[0],wins[1],wins[2],-losses[1],wins[3],-losses[2],wins[4],-losses[3],wins[5]]
+    assert len(result)==10 and sum(result)==2735
+    assert all(BOT_START+sum(result[:i])>=0 for i in range(1,11))
+    return result
+
 def bot_offset(index):
     return 60 * (0 if index == 0 else BOT_CLOSE_MINUTES[index-1])
 
@@ -696,6 +678,10 @@ def bot_save(state,user):
     else:
         raise ValueError('Registration required for demo bot')
 
+LEGACY_BOT_MINUTES = (5,15,30,50,70,95,120)
+def bot_minutes(state):
+    return BOT_CLOSE_MINUTES if len(state.get('changes') or []) == 10 else LEGACY_BOT_MINUTES
+
 def bot_advance(state):
     if not state.get('active') or not state.get('started_at'):
         return False
@@ -703,17 +689,18 @@ def bot_advance(state):
     try: start=datetime.fromisoformat(state['started_at'])
     except (TypeError,ValueError): return False
     elapsed=max(0,(now-start).total_seconds())
-    # Seven settlements at equal intervals, ending at 2h.
-    due=sum(elapsed >= minute*60 for minute in BOT_CLOSE_MINUTES)
+    # Ten simulated settlements over two hours.
+    minutes=bot_minutes(state)
+    due=sum(elapsed >= minute*60 for minute in minutes)
     changed=False
     while state['step'] < due:
         i=state['step']; change=state.get('changes', BOT_CHANGES)[i]
         state['balance']=round(state['balance']+change,2)
         state['step']=i+1
-        at=(start+timedelta(seconds=BOT_CLOSE_MINUTES[i]*60)).isoformat()
-        state['history'].append({'number':i+1,'result':BOT_SEQUENCE[i],'pnl':change,'balance':state['balance'],'at':at,'opened_at':(start+timedelta(seconds=bot_offset(i))).isoformat(),'mode':'SIMULATED','pair':state.get('pairs',BOT_PAIRS)[i],'side':BOT_SIDES[i]})
+        at=(start+timedelta(seconds=minutes[i]*60)).isoformat()
+        state['history'].append({'number':i+1,'result':BOT_SEQUENCE[i],'pnl':change,'balance':state['balance'],'at':at,'opened_at':(start+timedelta(seconds=60*(0 if i==0 else minutes[i-1]))).isoformat(),'mode':'SIMULATED','pair':state.get('pairs',BOT_PAIRS)[i],'side':BOT_SIDES[i]})
         changed=True
-    if state['step']==7:
+    if state['step']==len(minutes):
         state['active']=False; state['finished_at']=(start+timedelta(seconds=BOT_DURATION)).isoformat(); changed=True
     return changed
 
@@ -725,14 +712,14 @@ def bot_current():
 def bot_public(state):
     # Only reveal the current simulated position, never future results or P/L.
     position = None
-    if state.get('active') and state.get('started_at') and state.get('step',0) < 7:
+    if state.get('active') and state.get('started_at') and state.get('step',0) < len(bot_minutes(state)):
         i = state['step']
         start = datetime.fromisoformat(state['started_at'])
         position = {'pair':state.get('pairs',BOT_PAIRS)[i], 'side':BOT_SIDES[i], 'number':i+1,
-                    'opened_at':(start+timedelta(seconds=bot_offset(i))).isoformat(),
-                    'closes_at':(start+timedelta(seconds=BOT_CLOSE_MINUTES[i]*60)).isoformat(),
+                    'opened_at':(start+timedelta(seconds=60*(0 if i==0 else minutes[i-1]))).isoformat(),
+                    'closes_at':(start+timedelta(seconds=bot_minutes(state)[i]*60)).isoformat(),
                     'status':'SIMULATED_OPEN'}
-    return {**{k:v for k,v in state.items() if k not in ('changes','withdrawals')},'mode':'SCRIPTED_DEMO','initial_capital':BOT_START,'target':BOT_TARGET,'duration_seconds':BOT_DURATION,'real_funds':False,'position':position}
+    return {**{k:v for k,v in state.items() if k not in ('changes','withdrawals')},'mode':'SCRIPTED_DEMO','initial_capital':BOT_START,'target':BOT_TARGET,'duration_seconds':BOT_DURATION,'total_trades':len(bot_minutes(state)),'real_funds':False,'position':position}
 
 
 @app.get('/api/bot-demo')
@@ -757,15 +744,15 @@ def demo_withdrawals():
     rows=conn.execute('SELECT id,amount_cents,currency,network,address,status,created_at FROM demo_withdraw_requests WHERE user_id=? ORDER BY id DESC LIMIT 30',(user['id'],)).fetchall()
     level_request=conn.execute('SELECT id,status FROM demo_level_requests WHERE user_id=? ORDER BY id DESC LIMIT 1',(user['id'],)).fetchone()
     conn.close()
-    return jsonify({'level':level,'limit':5 if level==1 else None,'available':round(state['balance'],2) if state.get('step')==7 else 0,'finished':state.get('step')==7,
+    return jsonify({'level':level,'limit':5 if level==1 else None,'available':round(state['balance'],2) if state.get('step')==len(bot_minutes(state)) else 0,'finished':state.get('step')==len(bot_minutes(state)),
                     'requests':[dict(r) for r in rows],'level_request':dict(level_request) if level_request else None,
-                    'currencies':DEMO_WITHDRAW_COINS,'real_funds':False})
+                    'currencies':DEMO_WITHDRAW_COINS,'withdraw_used':bool(any(r['status']=='APPROVED' for r in rows)),'real_funds':False})
 
 @app.post('/api/demo-withdrawals')
 def request_demo_withdrawal():
     state,user=bot_current()
     if not user: return jsonify({'error':'Login required'}),401
-    if state.get('step')!=7: return jsonify({'error':'Дождитесь завершения DEMO-симуляции.'}),409
+    if state.get('step')!=len(bot_minutes(state)): return jsonify({'error':'Дождитесь завершения DEMO-симуляции.'}),409
     data=request.get_json(silent=True) or {}
     currency=str(data.get('currency','')).upper().strip()
     network=str(data.get('network','')).strip()
@@ -783,7 +770,8 @@ def request_demo_withdrawal():
         pending=conn.execute("SELECT 1 FROM demo_withdraw_requests WHERE user_id=? AND status='PENDING'",(user['id'],)).fetchone()
         used=conn.execute("SELECT COALESCE(SUM(amount_cents),0) FROM demo_withdraw_requests WHERE user_id=? AND status='APPROVED'",(user['id'],)).fetchone()[0]
         if pending: raise ValueError('У вас уже есть заявка на проверке.')
-        if amount_cents<100 or (level==1 and amount_cents>500): raise ValueError('Лимит Level 1 — 5 DEMO USDT за заявку.')
+        if level==1 and used>0: raise ValueError('Лимит Level 1 уже использован. Доступно повышение до Level 2 через виртуальное пополнение.')
+        if amount_cents<100 or (level==1 and amount_cents!=500): raise ValueError('Лимит Level 1 — 5 DEMO USDT за заявку.')
         if used+amount_cents>round(state['balance']*100): raise ValueError('Недостаточно доступных виртуальных средств.')
         cur=conn.execute('INSERT INTO demo_withdraw_requests(user_id,amount_cents,currency,network,address) VALUES(?,?,?,?,?)',(user['id'],amount_cents,currency,network,address))
         rid=cur.lastrowid;conn.commit()
@@ -810,7 +798,7 @@ def request_demo_level_up():
         conn.rollback();return jsonify({'error':str(exc)}),409
     finally:conn.close()
     for admin in TG_ADMIN_IDS:
-        telegram_send(admin,f'⭐ DEMO Level 2 #{rid}\nПользователь: {user["public_id"]}\nEmail: {user["email"] or "—"}\nСтрана: {user["country"]}\nПри одобрении начислить 120 ВИРТУАЛЬНЫХ USDT и установить Level 2. Никакой реальной оплаты.',[[{'text':'✅ Одобрить DEMO','callback_data':f'lv:a:{rid}'},{'text':'❌ Отклонить','callback_data':f'lv:r:{rid}'}]])
+        telegram_send(admin,f'⭐ DEMO Level 2 #{rid}\nПользователь: {user["public_id"]}\nEmail: {user["email"] or "—"}\nСтрана: {user["country"]}\nДля Level 2 одобрите отдельную заявку на пополнение 120 DEMO USDT. Только после её одобрения уровень повысится автоматически. Никакой реальной оплаты.',[[{'text':'✅ Одобрить DEMO','callback_data':f'lv:a:{rid}'},{'text':'❌ Отклонить','callback_data':f'lv:r:{rid}'}]])
     return jsonify({'ok':True,'id':rid,'status':'PENDING','real_funds':False})
 
 def review_demo_payout(kind,rid,approve,actor):
@@ -822,7 +810,10 @@ def review_demo_payout(kind,rid,approve,actor):
         if not row or row['status']!='PENDING':
             conn.rollback();return 'Заявка уже обработана или не найдена.'
         if approve and kind=='lv':
-            conn.execute('UPDATE users SET demo_level=2,demo_balance=demo_balance+120 WHERE id=?',(row['user_id'],))
+            topup=conn.execute("SELECT 1 FROM demo_topup_requests WHERE user_id=? AND status='APPROVED' AND amount_cents>=12000 AND created_at>=? LIMIT 1",(row['user_id'],row['created_at'])).fetchone()
+            if not topup:
+                conn.rollback();return 'Сначала требуется одобрить DEMO-пополнение 120 USDT. Уровень не изменён.'
+            conn.execute('UPDATE users SET demo_level=2 WHERE id=?',(row['user_id'],))
         conn.execute(f'UPDATE {table} SET status=?,reviewed_at=CURRENT_TIMESTAMP,reviewed_by=? WHERE id=?',('APPROVED' if approve else 'REJECTED',str(actor),rid))
         admin_audit(conn,actor,'demo_'+kind+('_approve' if approve else '_reject'),row['user_id'],str(rid))
         conn.commit()
@@ -860,7 +851,7 @@ def bot_start():
     if state['active'] or state['step']:
         return jsonify({'error':'Demo already started; reset to replay.'}),409
     state['changes']=bot_random_changes()
-    state['pairs']=secrets.SystemRandom().sample(BOT_PAIR_POOL,7)
+    state['pairs']=secrets.SystemRandom().sample(BOT_PAIR_POOL,len(BOT_CLOSE_MINUTES))
     state['active']=True; state['started_at']=datetime.now(timezone.utc).isoformat()
     bot_save(state,user)
     return jsonify(bot_public(state))
@@ -938,6 +929,11 @@ def review_topup_request(request_id, approve, admin_id):
                     if debit.rowcount!=1: raise ValueError('Недостаточно DEMO-средств для активации')
                     state['funded']=True
                     conn.execute('INSERT INTO bot_demo(user_id,state_json) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET state_json=excluded.state_json,updated_at=CURRENT_TIMESTAMP',(r['user_id'],json.dumps(state)))
+        if approve and r['amount_cents']>=12000:
+            pending_level=conn.execute("SELECT id FROM demo_level_requests WHERE user_id=? AND status='PENDING' AND created_at<=? ORDER BY id DESC LIMIT 1",(r['user_id'],r['created_at'])).fetchone()
+            if pending_level:
+                conn.execute('UPDATE users SET demo_level=2 WHERE id=?',(r['user_id'],))
+                conn.execute("UPDATE demo_level_requests SET status='APPROVED',reviewed_at=CURRENT_TIMESTAMP,reviewed_by=? WHERE id=?",(str(admin_id),pending_level['id']))
         conn.execute('UPDATE demo_topup_requests SET status=?,reviewed_at=CURRENT_TIMESTAMP,reviewed_by=? WHERE id=?',('APPROVED' if approve else 'REJECTED',str(admin_id),request_id))
         admin_audit(conn,admin_id,'demo_topup_approve' if approve else 'demo_topup_reject',r['user_id'],f"#{request_id}; amount={r['amount_cents']}; bonus={r['bonus_cents']}")
         conn.commit()
