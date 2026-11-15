@@ -1,0 +1,1 @@
+Orbitra V47: UI language improvements for six languages (not exhaustive), button-based trade duration selection, login-gated password form, and illustrative per-trade DEMO P/L shown during bot sessions. No real trading or payments.

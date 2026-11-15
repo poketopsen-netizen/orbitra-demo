@@ -727,7 +727,7 @@ def bot_public(state):
                     'opened_at':(start+timedelta(seconds=60*(0 if i==0 else bot_minutes(state)[i-1]))).isoformat(),
                     'closes_at':(start+timedelta(seconds=bot_minutes(state)[i]*60)).isoformat(),
                     'status':'SIMULATED_OPEN'}
-    return {**{k:v for k,v in state.items() if k not in ('changes','withdrawals')},'mode':'SCRIPTED_DEMO','initial_capital':BOT_START,'target':BOT_TARGET,'duration_seconds':BOT_DURATION,'total_trades':len(bot_minutes(state)),'real_funds':False,'position':position}
+    return {**{k:v for k,v in state.items() if k not in ('changes','withdrawals')},'mode':'SCRIPTED_DEMO','initial_capital':BOT_START,'target':BOT_TARGET,'duration_seconds':BOT_DURATION,'total_trades':len(bot_minutes(state)),'real_funds':False,'position':position,'estimated_pnl':round(float(state.get('changes',BOT_CHANGES)[state['step']]),2) if position else None}
 
 
 @app.get('/api/bot-demo')

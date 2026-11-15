@@ -283,3 +283,6 @@ html,body{max-width:100%;overflow-x:hidden}
 .duration-row select{background:#071b16;color:#e9fff6;border:1px solid #285646;border-radius:10px;padding:10px 12px;font:inherit;font-weight:700;max-width:55%;cursor:pointer}
 .duration-row select:focus-visible{outline:2px solid #6bf3a4;outline-offset:2px}
 .trade-clock .countdown-ring{font-size:12px;white-space:nowrap;min-width:58px}
+
+/* V47: visible, tap-friendly durations; no iOS native dropdown */
+.duration-buttons-wrap{margin:14px 0}.duration-label{font-size:12px;color:#9ac5b6;margin-bottom:9px}.duration-buttons{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}.duration-choice{min-width:0;border:1px solid #285546;background:#081812;color:#c1e0d2;border-radius:10px;padding:12px 3px;font-size:12px;font-weight:750;cursor:pointer}.duration-choice.active{background:#70efa7;border-color:#70efa7;color:#04120b}.bot-estimate{display:block;margin-top:10px;color:#70efa7;font-size:12px;line-height:1.5}@media(max-width:360px){.duration-buttons{grid-template-columns:repeat(4,minmax(0,1fr));gap:4px}.duration-choice{font-size:11px}}
