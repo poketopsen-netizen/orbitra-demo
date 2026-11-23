@@ -20,8 +20,8 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
 app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=os.environ.get('RENDER', '').lower() == 'true')
-TRADE_DURATION_SECONDS = 10
-ALLOWED_TRADE_DURATIONS = {10, 60, 300, 900, 3600, 14400, 86400}
+TRADE_DURATION_SECONDS = 300
+ALLOWED_TRADE_DURATIONS = {300}  # V48 temporary: all new manual trades 5 minutes
 MARKET_CACHE = {}
 
 COUNTRIES_ES = [
@@ -650,8 +650,9 @@ BOT_PAIR_POOL = ['BTC/USDT','ETH/USDT','SOL/USDT','XRP/USDT','BNB/USDT','ADA/USD
 BOT_SIDES = ['LONG','SHORT','LONG','SHORT','LONG','LONG','SHORT','LONG','SHORT','LONG']
 BOT_START = 50.0
 BOT_TARGET = 2785.0
-BOT_DURATION = 2 * 3600
-BOT_CLOSE_MINUTES = (5, 13, 24, 36, 49, 63, 76, 90, 105, 120)
+BOT_DURATION = 5 * 60  # V49: ten new bot trades, 30 seconds each
+BOT_CLOSE_MINUTES = (0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5)
+PREVIOUS_BOT_CLOSE_MINUTES = (5, 13, 24, 36, 49, 63, 76, 90, 105, 120)
 BOT_CHANGES = [450,-50,420,460,-65,480,-80,520,-100,700]
 def bot_random_changes():
     """10 artificial settlements; exact final demo balance 2785, not market-derived."""
@@ -688,7 +689,7 @@ def bot_save(state,user):
 
 LEGACY_BOT_MINUTES = (5,15,30,50,70,95,120)
 def bot_minutes(state):
-    return BOT_CLOSE_MINUTES if len(state.get('changes') or []) == 10 else LEGACY_BOT_MINUTES
+    return tuple(state.get('close_minutes') or (PREVIOUS_BOT_CLOSE_MINUTES if len(state.get('changes') or []) == 10 else LEGACY_BOT_MINUTES))
 
 def bot_advance(state):
     if not state.get('active') or not state.get('started_at'):
@@ -697,7 +698,7 @@ def bot_advance(state):
     try: start=datetime.fromisoformat(state['started_at'])
     except (TypeError,ValueError): return False
     elapsed=max(0,(now-start).total_seconds())
-    # Ten simulated settlements over two hours.
+    # Ten simulated settlements at 30-second intervals for new sessions.
     minutes=bot_minutes(state)
     due=sum(elapsed >= minute*60 for minute in minutes)
     changed=False
@@ -709,7 +710,7 @@ def bot_advance(state):
         state['history'].append({'number':i+1,'result':BOT_SEQUENCE[i],'pnl':change,'balance':state['balance'],'at':at,'opened_at':(start+timedelta(seconds=60*(0 if i==0 else bot_minutes(state)[i-1]))).isoformat(),'mode':'SIMULATED','pair':state.get('pairs',BOT_PAIRS)[i],'side':BOT_SIDES[i]})
         changed=True
     if state['step']==len(minutes):
-        state['active']=False; state['finished_at']=(start+timedelta(seconds=BOT_DURATION)).isoformat(); changed=True
+        state['active']=False; state['finished_at']=(start+timedelta(seconds=minutes[-1]*60)).isoformat(); changed=True
     return changed
 
 def bot_current():
@@ -727,7 +728,7 @@ def bot_public(state):
                     'opened_at':(start+timedelta(seconds=60*(0 if i==0 else bot_minutes(state)[i-1]))).isoformat(),
                     'closes_at':(start+timedelta(seconds=bot_minutes(state)[i]*60)).isoformat(),
                     'status':'SIMULATED_OPEN'}
-    return {**{k:v for k,v in state.items() if k not in ('changes','withdrawals')},'mode':'SCRIPTED_DEMO','initial_capital':BOT_START,'target':BOT_TARGET,'duration_seconds':BOT_DURATION,'total_trades':len(bot_minutes(state)),'real_funds':False,'position':position,'estimated_pnl':round(float(state.get('changes',BOT_CHANGES)[state['step']]),2) if position else None}
+    return {**{k:v for k,v in state.items() if k not in ('changes','withdrawals')},'mode':'SCRIPTED_DEMO','initial_capital':BOT_START,'target':BOT_TARGET,'duration_seconds':bot_minutes(state)[-1]*60,'total_trades':len(bot_minutes(state)),'real_funds':False,'position':position}
 
 
 @app.get('/api/bot-demo')
@@ -859,6 +860,7 @@ def bot_start():
     if state['active'] or state['step']:
         return jsonify({'error':'Demo already started; reset to replay.'}),409
     state['changes']=bot_random_changes()
+    state['close_minutes']=list(BOT_CLOSE_MINUTES)
     state['pairs']=secrets.SystemRandom().sample(BOT_PAIR_POOL,len(BOT_CLOSE_MINUTES))
     state['active']=True; state['started_at']=datetime.now(timezone.utc).isoformat()
     bot_save(state,user)

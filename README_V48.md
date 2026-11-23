@@ -1,0 +1,1 @@
+Orbitra V48 temporary 5-minute mode. All NEW manual trades use a fixed 300-second duration; chart uses 5-minute candles. All NEW AI Bot sessions have ten sequential five-minute trades, total 50 minutes. Existing bot sessions keep their previous schedule via backward-compatible fallback. Estimated bot P/L is removed from UI and API. This is a DEMO simulation.
