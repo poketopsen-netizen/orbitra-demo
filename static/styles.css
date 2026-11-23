@@ -286,3 +286,7 @@ html,body{max-width:100%;overflow-x:hidden}
 
 /* V47: visible, tap-friendly durations; no iOS native dropdown */
 .duration-buttons-wrap{margin:14px 0}.duration-label{font-size:12px;color:#9ac5b6;margin-bottom:9px}.duration-buttons{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}.duration-choice{min-width:0;border:1px solid #285546;background:#081812;color:#c1e0d2;border-radius:10px;padding:12px 3px;font-size:12px;font-weight:750;cursor:pointer}.duration-choice.active{background:#70efa7;border-color:#70efa7;color:#04120b}.bot-estimate{display:block;margin-top:10px;color:#70efa7;font-size:12px;line-height:1.5}@media(max-width:360px){.duration-buttons{grid-template-columns:repeat(4,minmax(0,1fr));gap:4px}.duration-choice{font-size:11px}}
+
+/* V50: independent, readable DEMO tag at every mobile width */
+.bot-lab .page-title{display:flex;align-items:center;flex-wrap:wrap;gap:10px;line-height:1.16}
+.bot-lab .page-title .bot-demo-tag{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;font-family:inherit;font-size:11px;line-height:1.2;letter-spacing:.04em;font-weight:800;white-space:nowrap;vertical-align:initial;padding:5px 10px;margin:0;border-radius:999px;position:relative;text-decoration:none}
