@@ -290,8 +290,3 @@ html,body{max-width:100%;overflow-x:hidden}
 /* V50: independent, readable DEMO tag at every mobile width */
 .bot-lab .page-title{display:flex;align-items:center;flex-wrap:wrap;gap:10px;line-height:1.16}
 .bot-lab .page-title .bot-demo-tag{display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;font-family:inherit;font-size:11px;line-height:1.2;letter-spacing:.04em;font-weight:800;white-space:nowrap;vertical-align:initial;padding:5px 10px;margin:0;border-radius:999px;position:relative;text-decoration:none}
-
-/* V51 - conspicuous one-time DEMO wallet transfer and Level 1 limit */
-.bot-transfer-wallet{display:block;width:100%;min-height:62px;margin:16px 0;font-weight:850;font-size:16px;box-shadow:0 8px 28px rgba(80,230,151,.23)}
-.bot-transfer-wallet[hidden],.bot-level-limit[hidden]{display:none!important}
-.bot-level-limit{margin:12px 0;padding:14px;border:1px solid rgba(97,227,160,.38);border-radius:14px;color:#c7eed8;background:rgba(27,100,69,.17);line-height:1.55}
