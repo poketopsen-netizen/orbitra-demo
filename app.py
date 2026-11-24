@@ -212,7 +212,7 @@ def current_user():
     uid = session.get('user_id')
     if not uid: return None
     conn = db()
-    user = conn.execute('SELECT id, public_id, first_name, last_name, country, demo_balance, password_hash, email FROM users WHERE id=?',(uid,)).fetchone()
+    user = conn.execute('SELECT id, public_id, first_name, last_name, country, demo_balance, password_hash, email, demo_level FROM users WHERE id=?',(uid,)).fetchone()
     conn.close(); return user
 
 
@@ -755,88 +755,57 @@ DEMO_WITHDRAW_COINS = {
 
 @app.get('/api/demo-withdrawals')
 def demo_withdrawals():
-    state, user = bot_current()
-    if not user: return jsonify({'error':'Login required'}), 401
-    conn=db()
-    level=conn.execute('SELECT demo_level FROM users WHERE id=?',(user['id'],)).fetchone()['demo_level']
-    rows=conn.execute('SELECT id,amount_cents,currency,network,address,status,created_at FROM demo_withdraw_requests WHERE user_id=? ORDER BY id DESC LIMIT 30',(user['id'],)).fetchall()
-    level_request=conn.execute('SELECT id,status FROM demo_level_requests WHERE user_id=? ORDER BY id DESC LIMIT 1',(user['id'],)).fetchone()
-    conn.close()
-    return jsonify({'level':level,'limit':5 if level==1 else None,'available':round(state['balance'],2) if state.get('step')==len(bot_minutes(state)) else 0,'finished':state.get('step')==len(bot_minutes(state)),
-                    'requests':[dict(r) for r in rows],'level_request':dict(level_request) if level_request else None,
-                    'currencies':DEMO_WITHDRAW_COINS,'withdraw_used':bool(any(r['status']=='APPROVED' for r in rows)),'real_funds':False})
+    user=current_user()
+    if not user:return jsonify(error='Login required'),401
+    with db() as conn:
+        rows=conn.execute('SELECT * FROM demo_withdraw_requests WHERE user_id=? ORDER BY id DESC',(user['id'],)).fetchall()
+        level=user['demo_level']
+        used=sum(r['amount_cents'] for r in rows if r['status']=='APPROVED')
+        limit=500 if level==1 else 1500 if level==2 else None
+        available=min(round(user['demo_balance']*100),max(0,limit-used)) if limit is not None else round(user['demo_balance']*100)
+        return jsonify(level=level,available=available/100,finished=True,requests=[dict(r) for r in rows],currencies=DEMO_WITHDRAW_COINS,real_funds=False)
 
 @app.post('/api/demo-withdrawals')
 def request_demo_withdrawal():
-    state,user=bot_current()
-    if not user: return jsonify({'error':'Login required'}),401
-    if state.get('step')!=len(bot_minutes(state)): return jsonify({'error':'Дождитесь завершения DEMO-симуляции.'}),409
+    user=current_user()
+    if not user:return jsonify(error='Login required'),401
     data=request.get_json(silent=True) or {}
-    currency=str(data.get('currency','')).upper().strip()
-    network=str(data.get('network','')).strip()
-    address=str(data.get('address','')).strip()
-    if currency not in DEMO_WITHDRAW_COINS or network not in DEMO_WITHDRAW_COINS[currency]:
-        return jsonify({'error':'Выберите поддерживаемую криптовалюту и сеть.'}),400
-    if len(address)<8 or len(address)>160 or any(c in address for c in '<>\n\r'):
-        return jsonify({'error':'Укажите корректный учебный адрес (8–160 символов).'}),400
-    try: amount_cents=round(float(data.get('amount',5))*100)
-    except (ValueError,TypeError): return jsonify({'error':'Неверная сумма.'}),400
+    try:
+        amount=float(data.get('amount',0)); assert math.isfinite(amount) and amount>0 and amount<=1000000
+        cents=round(amount*100); assert cents>0 and abs(amount*100-cents)<0.001
+    except (ValueError,TypeError,AssertionError,OverflowError):return jsonify(error='Invalid DEMO amount'),400
+    currency=data.get('currency','USDT'); network=data.get('network','TRC20')
+    if currency not in DEMO_WITHDRAW_COINS or network not in DEMO_WITHDRAW_COINS[currency]:return jsonify(error='Invalid network'),400
     conn=db()
     try:
         conn.execute('BEGIN IMMEDIATE')
-        level=conn.execute('SELECT demo_level FROM users WHERE id=?',(user['id'],)).fetchone()['demo_level']
-        pending=conn.execute("SELECT 1 FROM demo_withdraw_requests WHERE user_id=? AND status='PENDING'",(user['id'],)).fetchone()
-        used=conn.execute("SELECT COALESCE(SUM(amount_cents),0) FROM demo_withdraw_requests WHERE user_id=? AND status='APPROVED'",(user['id'],)).fetchone()[0]
-        if pending: raise ValueError('У вас уже есть заявка на проверке.')
-        if level==1 and used>0: raise ValueError('Лимит Level 1 уже использован. Доступно повышение до Level 2 через виртуальное пополнение.')
-        if amount_cents<100 or (level==1 and amount_cents!=500): raise ValueError('Лимит Level 1 — 5 DEMO USDT за заявку.')
-        if used+amount_cents>round(state['balance']*100): raise ValueError('Недостаточно доступных виртуальных средств.')
-        cur=conn.execute('INSERT INTO demo_withdraw_requests(user_id,amount_cents,currency,network,address) VALUES(?,?,?,?,?)',(user['id'],amount_cents,currency,network,address))
-        rid=cur.lastrowid;conn.commit()
-    except ValueError as exc:
-        conn.rollback();return jsonify({'error':str(exc)}),409
+        u=conn.execute('SELECT * FROM users WHERE id=?',(user['id'],)).fetchone()
+        used=conn.execute("SELECT COALESCE(SUM(amount_cents),0) FROM demo_withdraw_requests WHERE user_id=? AND status='APPROVED'",(u['id'],)).fetchone()[0]
+        cap=500 if u['demo_level']==1 else 1500 if u['demo_level']==2 else None
+        if cap is not None and used+cents>cap:return jsonify(error='DEMO limit reached'),409
+        if conn.execute('UPDATE users SET demo_balance=ROUND(demo_balance-?,2) WHERE id=? AND demo_balance>=?',(cents/100,u['id'],cents/100)).rowcount!=1:return jsonify(error='Insufficient virtual balance'),409
+        conn.execute("INSERT INTO demo_withdraw_requests(user_id,amount_cents,currency,network,address,status) VALUES(?,?,?,?,?,'APPROVED')",(u['id'],cents,currency,network,'DEMO-SINK-NOT-A-WALLET'))
+        conn.commit();return jsonify(ok=True,real_funds=False)
     finally:conn.close()
-    for admin in TG_ADMIN_IDS:
-        telegram_send(admin,f'🧪 DEMO-вывод #{rid} (НЕ реальная выплата)\nПользователь: {user["public_id"]}\nEmail: {user["email"] or "—"}\nСтрана: {user["country"]}\nУровень: {level}\nСумма: {amount_cents/100:.2f} DEMO USDT\nВалюта: {currency}\nСеть: {network}\nАдрес: {address}',[[{'text':'✅ Одобрить DEMO','callback_data':f'wd:a:{rid}'},{'text':'❌ Отклонить','callback_data':f'wd:r:{rid}'}]])
-    return jsonify({'ok':True,'id':rid,'status':'PENDING','real_funds':False})
 
 @app.post('/api/demo-level-up')
 def request_demo_level_up():
-    state,user=bot_current()
-    if not user:return jsonify({'error':'Login required'}),401
-    conn=db()
-    try:
-        conn.execute('BEGIN IMMEDIATE')
-        level=conn.execute('SELECT demo_level FROM users WHERE id=?',(user['id'],)).fetchone()['demo_level']
-        if level>=2: raise ValueError('Уровень 2 уже активен.')
-        if conn.execute("SELECT 1 FROM demo_level_requests WHERE user_id=? AND status='PENDING'",(user['id'],)).fetchone(): raise ValueError('Заявка на уровень 2 уже рассматривается.')
-        rid=conn.execute('INSERT INTO demo_level_requests(user_id) VALUES(?)',(user['id'],)).lastrowid
-        conn.commit()
-    except ValueError as exc:
-        conn.rollback();return jsonify({'error':str(exc)}),409
-    finally:conn.close()
-    for admin in TG_ADMIN_IDS:
-        telegram_send(admin,f'⭐ DEMO Level 2 #{rid}\nПользователь: {user["public_id"]}\nEmail: {user["email"] or "—"}\nСтрана: {user["country"]}\nДля Level 2 одобрите отдельную заявку на пополнение 120 DEMO USDT. Только после её одобрения уровень повысится автоматически. Никакой реальной оплаты.',[[{'text':'✅ Одобрить DEMO','callback_data':f'lv:a:{rid}'},{'text':'❌ Отклонить','callback_data':f'lv:r:{rid}'}]])
-    return jsonify({'ok':True,'id':rid,'status':'PENDING','real_funds':False})
+    user=current_user()
+    if not user:return jsonify(error='Login required'),401
+    with db() as conn:
+        conn.execute('UPDATE users SET demo_level=2 WHERE id=? AND demo_level=1',(user['id'],))
+    return jsonify(ok=True,real_funds=False)
+
+@app.post('/api/demo-verification')
+def demo_verification():
+    user=current_user()
+    if not user:return jsonify(error='Login required'),401
+    with db() as conn:
+        conn.execute('UPDATE users SET demo_level=3 WHERE id=? AND demo_level=2',(user['id'],))
+    return jsonify(ok=True,real_funds=False)
 
 def review_demo_payout(kind,rid,approve,actor):
-    table='demo_withdraw_requests' if kind=='wd' else 'demo_level_requests'
-    conn=db()
-    try:
-        conn.execute('BEGIN IMMEDIATE')
-        row=conn.execute(f'SELECT * FROM {table} WHERE id=?',(rid,)).fetchone()
-        if not row or row['status']!='PENDING':
-            conn.rollback();return 'Заявка уже обработана или не найдена.'
-        if approve and kind=='lv':
-            topup=conn.execute("SELECT 1 FROM demo_topup_requests WHERE user_id=? AND status='APPROVED' AND amount_cents>=12000 AND created_at>=? LIMIT 1",(row['user_id'],row['created_at'])).fetchone()
-            if not topup:
-                conn.rollback();return 'Сначала требуется одобрить DEMO-пополнение 120 USDT. Уровень не изменён.'
-            conn.execute('UPDATE users SET demo_level=2 WHERE id=?',(row['user_id'],))
-        conn.execute(f'UPDATE {table} SET status=?,reviewed_at=CURRENT_TIMESTAMP,reviewed_by=? WHERE id=?',('APPROVED' if approve else 'REJECTED',str(actor),rid))
-        admin_audit(conn,actor,'demo_'+kind+('_approve' if approve else '_reject'),row['user_id'],str(rid))
-        conn.commit()
-        return ('Одобрена' if approve else 'Отклонена')+f' DEMO-заявка #{rid}. Реальная выплата не производится.'
-    finally:conn.close()
+    return 'Legacy requests disabled; use free DEMO simulator.'
 
 @app.post('/api/bot-demo/activate-wallet')
 def bot_activate_wallet():
@@ -895,8 +864,7 @@ def bot_transfer():
         bot_advance(state)
         if state.get('transferred') or not state.get('finished_at'):
             return jsonify({'error':'Transfer unavailable'}),409
-        used=conn.execute("SELECT COALESCE(SUM(amount_cents),0) FROM demo_withdraw_requests WHERE user_id=? AND status IN ('APPROVED','PENDING')",(user['id'],)).fetchone()[0]
-        amount=max(0,round(state['balance']-used/100,2))
+        amount=max(0,round(state['balance'],2))
         state['balance']=0; state['transferred']=True
         conn.execute('UPDATE users SET demo_balance=ROUND(demo_balance+?,2) WHERE id=?',(amount,user['id']))
         conn.execute('UPDATE bot_demo SET state_json=? WHERE user_id=?',(json.dumps(state),user['id']))
@@ -963,11 +931,6 @@ def review_topup_request(request_id, approve, admin_id):
                     if debit.rowcount!=1: raise ValueError('Недостаточно DEMO-средств для активации')
                     state['funded']=True
                     conn.execute('INSERT INTO bot_demo(user_id,state_json) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET state_json=excluded.state_json,updated_at=CURRENT_TIMESTAMP',(r['user_id'],json.dumps(state)))
-        if approve and r['amount_cents']>=12000:
-            pending_level=conn.execute("SELECT id FROM demo_level_requests WHERE user_id=? AND status='PENDING' AND created_at<=? ORDER BY id DESC LIMIT 1",(r['user_id'],r['created_at'])).fetchone()
-            if pending_level:
-                conn.execute('UPDATE users SET demo_level=2 WHERE id=?',(r['user_id'],))
-                conn.execute("UPDATE demo_level_requests SET status='APPROVED',reviewed_at=CURRENT_TIMESTAMP,reviewed_by=? WHERE id=?",(str(admin_id),pending_level['id']))
         conn.execute('UPDATE demo_topup_requests SET status=?,reviewed_at=CURRENT_TIMESTAMP,reviewed_by=? WHERE id=?',('APPROVED' if approve else 'REJECTED',str(admin_id),request_id))
         admin_audit(conn,admin_id,'demo_topup_approve' if approve else 'demo_topup_reject',r['user_id'],f"#{request_id}; amount={r['amount_cents']}; bonus={r['bonus_cents']}")
         conn.commit()
@@ -1126,33 +1089,7 @@ def create_demo_topup():
 
 @app.get('/api/demo-payment-methods')
 def demo_payment_methods():
-    user=current_user()
-    if not user: return jsonify({'error':'Login required'}),401
-    conn=db()
-    rows=conn.execute('SELECT country,method,label,details FROM geo_demo_methods WHERE country IN (?,?) AND enabled=1 ORDER BY CASE WHEN country=? THEN 0 ELSE 1 END',(user['country'],'ALL',user['country'])).fetchall()
-    bank_request=conn.execute("SELECT id,status,sender_bank FROM demo_bank_requests WHERE user_id=? ORDER BY id DESC LIMIT 1",(user['id'],)).fetchone()
-    conn.close()
-    # Country overrides ALL. Cryptocurrency is configured by currency+network (crypto:USDT:TRC20).
-    unique={}
-    for r in rows:
-        key=r['method']
-        if key not in unique: unique[key]=dict(r)
-    methods=[]
-    for key,r in unique.items():
-        if key.startswith('crypto') and r['country']!='ALL': continue
-        if key=='bank': methods.append({'method':'bank','key':'bank','label':r['label'],'details':r['details'],'configured':True})
-        elif key=='crypto' or key.startswith('crypto:'):
-            parts=key.split(':')
-            currency=(parts[1] if len(parts)>1 else (re.search(r'USDT|USDC|BTC|ETH|TON|TRX|BNB|SOL',r['label'],re.I) or ['USDT'])[0]).upper()
-            network=(parts[2] if len(parts)>2 else (re.search(r'TRC20|ERC20|BEP20|TON|SOLANA|POLYGON|BASE',r['label'],re.I) or ['TRC20'])[0]).upper()
-            methods.append({'method':'crypto','key':key,'currency':currency,'network':network,'label':r['label'],'details':r['details'],'configured':True})
-    configured_crypto={(m['currency'],m['network']) for m in methods if m['method']=='crypto'}
-    for cur,network in CRYPTO_DEFAULTS:
-        if (cur,network) not in configured_crypto:
-            methods.append({'method':'crypto','key':f'crypto:{cur}:{network}','currency':cur,'network':network,'label':f'{cur} · {network} (DEMO)','details':'Тестовый адрес: DEMO-ONLY-NOT-A-WALLET','configured':False})
-    if not any(m['method']=='bank' for m in methods): methods.append({'method':'bank','key':'bank','label':'Банковский перевод','details':'','configured':False})
-    methods.sort(key=lambda m:(m['method']!='crypto',m.get('currency',''),m.get('network','')))
-    return jsonify({'country':user['country'],'methods':methods,'bank_request':dict(bank_request) if bank_request else None,'demo_only':True,'real_payments_enabled':False})
+    return jsonify(methods=[],demo_only=True,real_payments_enabled=False)
 
 @app.post('/api/demo-bank-request')
 def create_demo_bank_request():
@@ -1332,6 +1269,11 @@ def demo_fiat_equivalent():
     if not data:return jsonify({'available':False,'currency':currency,'reason':'Курс сейчас недоступен.'})
     balance=round(float(user['demo_balance']),2) if user else guest_demo_state()[0]
     return jsonify({'available':True,'currency':currency,'rate':data['rate'],'date':data['date'],'source':data['source'],'balance':balance,'stale':data['date']<today})
+
+@app.before_request
+def v52_virtual_only():
+    if request.path in ('/api/demo-topups','/api/demo-bank-request','/api/bot-demo/fund','/telegram/webhook'):
+        return jsonify(error='Legacy payment workflow disabled; virtual simulator only'),410
 
 init_db()
 
